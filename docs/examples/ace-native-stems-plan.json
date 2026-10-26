@@ -1,0 +1,19 @@
+{
+  "tracks": [
+    {
+      "id": "bass",
+      "prompt": "Generate only a warm acoustic bass part supporting the harmonic rhythm of the supplied audio context. Use sparse sustained notes, gentle attacks and stable timing. No drums, vocals or other instruments.",
+      "seed": 1283
+    },
+    {
+      "id": "keyboard",
+      "prompt": "Generate only a soft felt-piano part following the harmony and timing of the supplied audio context. Leave space between phrases, keep dynamics restrained, and avoid adding bass, drums, vocals or other instruments.",
+      "seed": 1284
+    },
+    {
+      "id": "strings",
+      "prompt": "Generate only a quiet sustained string ensemble part aligned with the supplied audio context. Follow its chord changes with slow entries and gentle releases. No piano, bass, percussion or vocals.",
+      "seed": 1285
+    }
+  ]
+}

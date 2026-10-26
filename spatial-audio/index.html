@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#17191c"><title>Spatial Audio Workbench · 空间音频工作台</title><link rel="icon" href="../public/spatial-icon.svg" type="image/svg+xml"><link rel="stylesheet" href="./style.css"><script type="module" src="./app.mjs"></script></head>
+<body>
+<a class="skip-link" href="#workbench">跳转到声场编辑</a>
+<header class="app-header"><a class="identity" href="./"><span class="mark" aria-hidden="true">s<span>a</span></span><span>Spatial Audio<small>空间音频工作台</small></span></a><nav aria-label="工作台导航"><a href="http://10.100.16.56:8189/studio/" target="_blank" rel="noopener">线上音乐生成 ↗</a><span class="current-page">本地空间音频</span></nav><div class="runtime"><span class="dot" id="runtime-dot"></span><span id="runtime-status">连接本地服务…</span></div></header>
+<main id="workbench">
+<div class="session-bar"><div class="session-name"><span class="session-icon" aria-hidden="true">◇</span><div><h1>空间混音</h1><span id="input-name">未命名项目</span></div></div><div class="session-format"><b id="session-layout">7.1.4</b><span id="session-channels">48 kHz / 12 ch</span></div><div class="session-actions"><label class="button secondary" for="file" id="import-label">导入分轨包</label><button id="render" disabled>渲染双耳与导出</button></div></div>
+<div class="workspace">
+<aside class="source-column">
+<section class="source-section"><div class="section-heading"><h2>音频</h2><span id="input-badge" class="badge">未导入</span></div><label class="project-label" for="saved-projects">本机项目</label><select id="saved-projects" disabled><option value="">暂无已保存项目</option></select>
+<label class="project-label" for="source-route">制作入口</label><select id="source-route"><option value="native-stems-first-v1">ACE 原生生成分轨 · ZIP</option><option value="separated-stereo-v1">立体声 · 本地自动分离</option></select>
+<div class="import-area" id="drop-zone"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M9 13v20h22V13M20 27V5m-7 7 7-7 7 7"/></svg><strong id="import-title">拖入原生分轨包</strong><span id="input-meta">ACE Base · WAV + 生成回执 · ZIP</span><input id="file" type="file" accept="application/zip,.zip" class="file-input"><label class="file-link" for="file">或选择文件</label></div>
+<audio id="source-audio" controls preload="metadata" aria-label="原始立体声音频"></audio><button id="separate" class="full" disabled hidden>本地自动分离</button><div class="progress-line"><progress id="progress" value="0" max="1"></progress><span id="progress-value">0%</span></div><p id="status" role="status" aria-live="polite">选择原生声部或本地自动分离，再进行混音与声场制作。</p>
+<p class="hint" id="native-workflow-state" role="status">原生分轨能力待核查</p><details class="source-extras"><summary>线上四模型 · 立体声下载与分离</summary><div id="online-link"></div><button class="secondary full" id="demo" hidden disabled>历史立体声技术样例</button><p class="hint" id="limits">2–12 条无损声部 · 同一零点与完整时间线</p></details></section>
+<section class="stems-section"><div class="section-heading"><h2>轨道</h2><span class="badge" id="stem-count">0 轨</span></div><div id="stems" class="stems"><p class="empty">分轨完成后显示音源。</p></div><audio id="stem-audio" controls preload="none" aria-label="选中分轨试听" hidden></audio></section>
+</aside>
+<section class="scene-section"><div class="stage-heading"><div class="section-heading"><h2>声场</h2><span class="badge" id="scene-state">等待音频</span></div><div class="view-presets" role="group" aria-label="三维观察视角"><button type="button" data-view="perspective" aria-pressed="true">三维</button><button type="button" data-view="top" aria-pressed="false">俯视</button><button type="button" data-view="front" aria-pressed="false">正视</button><button type="button" data-view="right" aria-pressed="false">侧视</button></div></div>
+<figure class="object-view"><div class="scene-viewport"><canvas id="scene-canvas" tabindex="0" role="application" aria-label="三维声场，拖动旋转、滚轮缩放，点击声源选择轨道，点击节点或轨迹定位时间"></canvas><div id="scene-labels" class="scene-labels"></div><span class="stage-layout-tag"><b id="stage-layout">7.1.4</b> <i>扬声器布局</i></span><span class="stage-help">拖动旋转 · 滚轮缩放 · 点线定位</span></div><figcaption class="scene-readout"><span>听者耳平面 <b>0°</b></span><span id="scene-coordinate">未选择轨道</span></figcaption></figure>
+<details class="projection-panel"><summary>精确定位视图</summary><div class="views"><figure class="top-view"><figcaption>方位角</figcaption><canvas id="top-canvas" tabindex="0" role="application" aria-label="俯视声场，可拖动或用方向键调整"></canvas></figure><figure class="side-view"><figcaption>仰角</figcaption><canvas id="side-canvas" tabindex="0" role="application" aria-label="高度侧视，可拖动调整"></canvas></figure></div></details>
+</section>
+<aside class="inspector"><div class="section-heading"><h2>轨道设置</h2><span id="selected-label">未选择轨道</span></div><div class="parameter-title">位置</div><div class="parameters" id="parameters"><label for="azimuth">方位角<output id="azimuth-value">0°</output><input type="range" id="azimuth" min="-180" max="180" step="1" value="0" disabled></label><label for="elevation">仰角<output id="elevation-value">0°</output><input type="range" id="elevation" min="-90" max="90" step="1" value="0" disabled></label><label for="width">立体声宽度<output id="width-value">30°</output><input type="range" id="width" min="0" max="120" step="1" value="30" disabled></label><label for="gain">轨道增益<output id="gain-value">0 dB</output><input type="range" id="gain" min="-24" max="6" step=".5" value="0" disabled></label></div>
+<div class="keyframe-editor"><div class="parameter-title">Automation</div><label class="checkbox"><input id="motion" type="checkbox" disabled> 启用位置轨迹</label><div class="keyframe-actions"><button id="add-keyframe" class="secondary" disabled>＋ 关键帧</button><button id="remove-keyframe" class="text-button" disabled>删除</button></div><label class="project-label" for="keyframe-time">选中关键帧 / 秒</label><input id="keyframe-time" type="number" min="0" step=".001" value="0" disabled><span id="keyframe-info" class="hint">在时间线上选择位置</span><div class="segmented" role="group" aria-label="编辑端点"><button id="edit-start" class="active" disabled>起点</button><button id="edit-end" disabled>终点</button></div><button id="reset" class="text-button" disabled>重置当前轨道</button></div>
+<section class="output-section"><div class="section-heading"><h2>导出</h2><span class="badge" id="output-state">未渲染</span></div><label class="project-label" for="speaker-layout">扬声器布局</label><select id="speaker-layout" disabled><option value="5.1.2">5.1.2 · 8 声道</option><option value="7.1.4">7.1.4 · 12 声道</option></select><div class="output-target"><span class="output-number" id="output-layout">7.1.4</span><div><span id="output-channels">12 声道 WAV</span><small>独立单声道 · 一轨一路输出</small></div></div><button id="render-speakers" class="full" disabled>仅渲染扬声器通道</button><div class="downloads"><a id="download-studio-package" hidden aria-disabled="true" download>棚内逐通道直出包 ↓</a><a id="download-surround" aria-disabled="true" download>5.1.2 WAV ↓</a><a id="download-package" aria-disabled="true" download>完整工程包 ↓</a><a id="download-binaural" aria-disabled="true" download>双耳试听 WAV ↓</a></div><details><summary>其他文件与渲染说明</summary><div class="downloads"><a id="download-foa" aria-disabled="true" download>AmbiX WAV ↓</a><a id="download-scene" aria-disabled="true" download>轨迹 JSON ↓</a><a id="download-quality" aria-disabled="true" download>双耳计量 ↓</a><a id="download-surround-report" aria-disabled="true" download>声道映射 ↓</a></div><p id="speaker-routing">5.1.2 扬声器馈送：L / R / C / LFE / Ls / Rs / Tml / Tmr。</p><p>7.1.4 棚内直出包包含逐通道单声道 WAV、路由识别音、CSV 与报告，按清单在 DAW 一轨一路输出。LFE 默认静音，完整低频保留于主声道。实际扬声器接线与声压仍需现场核验。</p><p>前方 0°、左方 +90°、右方 −90°、上方 +90°。扬声器渲染将下半球方向投影到水平；双耳使用浏览器通用 HRTF。轨道使用中性编号；生成目标与来源记录保存在工程包，实际隔离度仍需听辨。</p><p>三维视图是方向参照，不表示实测房间。输出不包含 Atmos ADM 元数据。</p></details></section></aside>
+<section class="automation-section"><div class="automation-heading"><h2>轨道自动化</h2><span class="automation-legend"><i></i>方位角 <i class="dashed"></i>仰角</span><span id="trajectory-duration">—</span></div><div class="transport"><button id="play-pause" aria-label="播放双耳试听" disabled>▶</button><select id="playback-source" aria-label="试听音源" disabled><option value="preview" disabled>HRTF 双耳</option><option value="source-audio" selected disabled>原曲参考</option><option value="stem-audio" disabled>分轨参考</option></select><span id="time-current">0:00</span><input id="seek" type="range" min="0" max="1" step=".01" value="0" aria-label="播放与编辑位置" disabled><span id="time-total">0:00</span><span id="preview-label">尚未渲染试听</span><audio id="preview" preload="metadata" aria-label="HRTF双耳音频试听"></audio></div><div id="automation-tracks"><p class="automation-empty">导入并分轨后，在时间线上添加关键帧，设计每一轨的移动路径。</p></div></section>
+</div>
+<details class="advanced-mix"><summary>混音分析与版本比较</summary>    <section class="mix-section" aria-labelledby="mix-title">
+      <div class="section-heading"><h2 id="mix-title">混音分析与比较</h2><span class="badge">规则规划 · 本地执行</span></div>
+      <div class="mix-toolbar">
+        <button id="mix-analyze" class="secondary" disabled>分析音频</button>
+        <label>参考音频（分析时绑定）<select id="mix-reference"><option value="">不使用参考</option></select></label>
+        <label>处理意图<select id="mix-intent"><option value="preserve">保留原始平衡</option><option value="clarity">检查低频清晰度</option><option value="reference">参考宽频段平衡</option></select></label>
+        <button id="mix-plan" class="secondary" disabled>生成提案</button>
+      </div>
+      <p id="mix-status" class="mix-note" role="status" aria-live="polite">分轨完成后，测量原音频与各个声部；处理候选不会自动覆盖声场。</p>
+      <div class="mix-metrics" id="mix-metrics"></div>
+      <details id="mix-diagnostics" hidden><summary>相位与频段检查</summary><p class="mix-note">按 0.5 秒检查原始立体声的单声道抵消。声部频段重叠只用于定位相互试听，不等同感知掩蔽，也不自动触发 EQ。</p><ul id="mix-diagnostic-list" class="mix-reasons"></ul></details>
+      <div id="mix-proposal" hidden>
+        <div class="mix-master">
+          <label>整体增益 / dB<input id="mix-master-gain" type="number" min="-24" max="0" step=".1"></label>
+          <label>120 Hz 低架 / dB<input id="mix-low-shelf" type="number" min="-3" max="3" step=".1"></label>
+          <label>6 kHz 高架 / dB<input id="mix-high-shelf" type="number" min="-3" max="3" step=".1"></label>
+        </div>
+        <div class="mix-table-scroll"><table class="mix-table"><caption>声部测量与处理参数</caption><thead><tr><th scope="col">声部</th><th scope="col">RMS / dBFS</th><th scope="col">活动比例</th><th scope="col">增益 / dB</th><th scope="col">高通 / Hz</th><th scope="col">EQ / Hz</th><th scope="col">EQ / dB</th></tr></thead><tbody id="mix-stem-parameters"></tbody></table></div>
+        <p class="mix-note">活动比例仅表示 100 ms 窗口超过 −60 dBFS 的比例。每轨高通与 EQ 独立处理；不自动对齐各轨响度，不默认加入压缩、降噪或混响。</p>
+        <ul id="mix-reasons" class="mix-reasons"></ul>
+        <button id="mix-process" disabled>处理候选</button>
+        <span class="mix-note">每轮测量最多保留两个不同候选。</span>
+      </div>
+      <div id="mix-comparison" class="mix-comparison" hidden>
+        <div class="mix-toolbar"><label>候选版本<select id="mix-versions"></select></label><span class="badge" id="mix-match-status">等待比较</span></div>
+        <p id="mix-result" class="mix-note"></p>
+        <div class="segmented mix-ab" role="group" aria-label="原版与候选比较"><button id="mix-a" class="active" aria-pressed="true">A · 原版</button><button id="mix-b" aria-pressed="false">B · 处理候选</button></div>
+        <label class="checkbox mix-mono"><input id="mix-mono" type="checkbox" disabled> 单声道兼容试听 · (L+R)/2</label>
+        <audio id="mix-audio" controls preload="metadata" aria-label="等响度原版与候选比较试听"></audio>
+        <div class="mix-toolbar"><label>应用时的声场<select id="mix-layout"><option value="preserve">保留当前布局与轨迹</option><option value="content">内容适配 · 静态候选替换有效轨迹</option><option value="spacious">宽广 · 保留主体 · 静态候选</option><option value="anchored">前方锚定 · 无运动轨迹</option></select></label><button id="mix-apply" disabled>应用并渲染声场</button><button id="mix-revert" class="secondary" disabled>恢复应用前声场</button><a id="mix-download" download>↓ 混音比较包</a><a id="mix-report" download>↓ 测量与处理记录</a></div>
+        <p id="mix-content-note" class="mix-note" hidden></p>
+        <p class="mix-note">A/B 比较使用相同时间位置，立体声音量仅衰减以匹配整体响度。单声道保留这一增益，不补偿抵消损失。候选仍待人工听辨；音频统计不代表音乐品质。“前方锚定”为本项目布局预设。</p>
+      </div>
+    </section>
+</details>
+<footer><span>立体声下载 → 本地分轨 → 轨迹设计 → 扬声器导出</span><a href="/docs/SPATIAL-AUDIO.md" target="_blank" rel="noopener">运行与格式说明 ↗</a><span id="project-id">无活动项目</span></footer></main></body></html>

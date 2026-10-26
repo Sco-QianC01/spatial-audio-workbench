@@ -1,0 +1,7 @@
+# Dedicated local workbench; do not install into the acquisition environment.
+aiohttp>=3.11,<4
+numpy>=1.26,<3
+scipy>=1.12,<2
+soundfile>=0.12,<1
+# Install matching torch/torchaudio into this same .venv (tested: 2.9.1+cpu).
+# Model weights are supplied separately by --weights and are never downloaded here.

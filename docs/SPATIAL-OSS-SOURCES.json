@@ -1,0 +1,63 @@
+{
+  "checkedAt": "2026-10-25T10:06:42.015394+00:00",
+  "sources": [
+    {
+      "name": "Line2.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r180/examples/jsm/lines/Line2.js",
+      "httpStatus": 200,
+      "sourceBytes": 1486,
+      "sourceSha256": "69dd2120d4df14208796acf199f80a64d37e042cfa65dc2b98286694b2954194",
+      "localSha256": "69dd2120d4df14208796acf199f80a64d37e042cfa65dc2b98286694b2954194",
+      "modification": "unchanged; relative addon imports already resolve locally",
+      "license": "MIT"
+    },
+    {
+      "name": "LineSegments2.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r180/examples/jsm/lines/LineSegments2.js",
+      "httpStatus": 200,
+      "sourceBytes": 11277,
+      "sourceSha256": "5d707b4e6056945b3b34cd8291b6afe16c913f6b1e8eac7b6d6892f41c45c26d",
+      "localSha256": "644be3010251121931d2c19dc3f350cb91ac5b846b2f5672b41fce299578b044",
+      "modification": "three import redirected to vendored r180 module; otherwise unchanged",
+      "license": "MIT"
+    },
+    {
+      "name": "LineGeometry.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r180/examples/jsm/lines/LineGeometry.js",
+      "httpStatus": 200,
+      "sourceBytes": 3479,
+      "sourceSha256": "b7ec6b0011e3b09dc72e17cfd8e8945295cb2bc8c8aa9aa19e47119680bdad7e",
+      "localSha256": "b7ec6b0011e3b09dc72e17cfd8e8945295cb2bc8c8aa9aa19e47119680bdad7e",
+      "modification": "unchanged; relative addon imports already resolve locally",
+      "license": "MIT"
+    },
+    {
+      "name": "LineSegmentsGeometry.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r180/examples/jsm/lines/LineSegmentsGeometry.js",
+      "httpStatus": 200,
+      "sourceBytes": 6893,
+      "sourceSha256": "471f0a954a0c9c59d3d151392f424142a9164a722802f63b371971378a84a1b1",
+      "localSha256": "f8aa24820ca6953c538f8a51c0f41f872992bfafee4a033f6a718af4c3ce2dae",
+      "modification": "three import redirected to vendored r180 module; otherwise unchanged",
+      "license": "MIT"
+    },
+    {
+      "name": "LineMaterial.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r180/examples/jsm/lines/LineMaterial.js",
+      "httpStatus": 200,
+      "sourceBytes": 13228,
+      "sourceSha256": "8450d827153d2509e43513cd123df786d7c8c7cdbfd4c7eea4c9e1621f2a7fb5",
+      "localSha256": "b4a3d36b920e19d1ee045e0f7575015ac0219353b704a3285e5abe4f16c64746",
+      "modification": "three import redirected to vendored r180 module; otherwise unchanged",
+      "license": "MIT"
+    },
+    {
+      "name": "spline editor reference",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r180/examples/webgl_geometry_spline_editor.html",
+      "httpStatus": 200,
+      "sourceBytes": 10024,
+      "sourceSha256": "ef79b51a27650568860a84c7cee0e4960a4d7f3282140948db061dc7f1866ac7",
+      "integration": "read for interaction patterns; not copied into runtime"
+    }
+  ]
+}

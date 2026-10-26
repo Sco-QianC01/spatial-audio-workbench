@@ -1,0 +1,11 @@
+Creative Commons Licence
+Infinite, 3D Head Scan by Lee Perry-Smith is licensed under a Creative Commons Attribution 3.0 Unported License.
+Based on a work at www.triplegangers.com.
+Permissions beyond the scope of this license may be available at http://www.ir-ltd.net/
+Please remember: Do what you want with the files, but always mention where you got them from...
+
+Source: https://github.com/mrdoob/three.js/tree/r180/examples/models/gltf/LeePerrySmith
+License: https://creativecommons.org/licenses/by/3.0/
+Changes: removed textures, cropped and closed the lower neck, recentered near the ears, rescaled and rotated to -Z forward.
+Source GLB SHA256: 402b8a8ac9f03232e6d64b5962929703a069daf99d3c49ac8eb0e48bedc9c576
+Used as a visual orientation reference, not an individualized acoustic head model.

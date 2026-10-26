@@ -1,0 +1,15 @@
+.venv/
+.runtime/
+artifacts/
+.phrase/
+dist/
+__pycache__/
+*.pyc
+*.log
+.env
+.env.*
+*.pt
+*.pth
+*.wav
+*.zip
+.DS_Store
