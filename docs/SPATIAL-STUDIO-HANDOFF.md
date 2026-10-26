@@ -53,7 +53,7 @@
 独立检查已导出的ZIP：
 
 ```sh
-.venv-spatial/bin/python tools/verify-spatial-studio.py /path/to/7.1.4.zip --output verification.json
+.venv/bin/python tools/verify-spatial-studio.py /path/to/7.1.4.zip --output verification.json
 ```
 
 检查实际PCM格式/采样数/峰值/静音约定、文件及场景SHA256、逐路识别音时段/频率/电平和任意时刻至多一个活动数字通道。后端发布前另检查12个mono与交错文件逐采样相同。

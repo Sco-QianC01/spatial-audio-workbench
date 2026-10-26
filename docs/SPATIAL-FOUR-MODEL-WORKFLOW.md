@@ -88,6 +88,6 @@
 
 本地库248条路径按SHA256得到151份不同文件内容，全部完成整曲解码；12个30秒片段及2首完整曲目完成实际分离、Automation和7.1.4导出，14包均通过独立文件校验。56个分离stem逐块读取通过，服务导入与规范化输入逐采样相同；248份原文件及12份元数据哈希未变。本轮未重新请求线上生成。
 
-记录位于`artifacts/spatial-library-20261025/`。`tools/audit-local-audio-library.py`接受inventory/output做完整解码和确定性选择，`tools/verify-local-library-spatial.py`接受selection/output串行执行真实本地流程并保留checkpoint。后者先检查实际上传大小，失败/中断项目的error状态需诊断；不能据checkpoint存在声称能自动恢复所有错误。
+下述为来源项目的历史批处理记录，两个批量审计脚本及其证据不随独立版本分发；当前独立流程使用 `tools/spatial-mix-agent.py`，安装见分轨路线文档。历史记录位于`artifacts/spatial-library-20261025/`。`tools/audit-local-audio-library.py`接受inventory/output做完整解码和确定性选择，`tools/verify-local-library-spatial.py`接受selection/output串行执行真实本地流程并保留checkpoint。后者先检查实际上传大小，失败/中断项目的error状态需诊断；不能据checkpoint存在声称能自动恢复所有错误。
 
 本轮新增“历史制作不抢占本地项目”的回归测试，空间前端30项通过，实际1920×1080及390×844浏览器恢复/静音源播放通过。分离听感、原始对象还原及棚内声场仍未验收。

@@ -46,12 +46,10 @@ Mac设备与物理5.1.2系统仍未验收。
 node --test tests/spatial-view.test.mjs tests/spatial-automation.test.mjs tests/spatial-trajectory.test.mjs
 npm test
 npm run build
-/home/codex/projects/neural-spatial-audio-runtime/.venv/bin/python -m unittest gateway/tests/test_spatial_audio.py
-LD_LIBRARY_PATH=/home/codex/projects/neural-spatial-audio-runtime/browser-libs/root/usr/lib/x86_64-linux-gnu \
-  /home/codex/projects/neural-spatial-audio-runtime/.venv/bin/python tools/verify-spatial-view.py
+.venv/bin/python tools/run-gateway-tests.py --suite spatial
 ```
 
-浏览器脚本复用已经渲染的项目，验证视角、选择、实际播放、随进度定位、二维键盘编辑、重新加载、WebGL降级和多尺寸布局；不提交任何API修改，不重复分轨或渲染。`SPATIAL_QA_PROJECT` 可指定另一已有完整渲染项目。证据保存在 `artifacts/spatial-visual-20261025/`，包含修改前截图和原文件备份。
+下文为来源项目的历史浏览器验收记录；其中旧机器路径、项目ID、验证脚本与证据目录不随本独立仓库分发。当前安装请先运行上述测试，再在本机实际检查播放、拖动、跳转、视角与多尺寸显示。
 
 0.4.1重做已通过3项坐标/扬声器布局Node检查；独立无桌面Chromium加载已有四轨项目，
 检查7个扬声器标签、四视角及1600px/390px显示，无页面异常、无API写入。

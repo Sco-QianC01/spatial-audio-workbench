@@ -12,10 +12,10 @@
 准备双声道无损 WAV/FLAC context，采样率 44.1 或 48 kHz，时长 0.1–600 秒；生成服务的实际时长限制仍须满足。所有声部共享它的 SHA256、完整帧数和零起点。context 是条件音频，导入后的混音不把它再作为一条声部相加。
 
 1. 复制并编辑 [计划示例](examples/ace-native-stems-plan.json)。每轨包含 `id`、具体 `prompt`、整数 `seed`，共 2–12 轨，ID 不重复。允许的 ID 为 `vocals`、`backing_vocals`、`drums`、`bass`、`guitar`、`keyboard`、`percussion`、`strings`、`synth`、`fx`、`brass`、`woodwinds`。示例提示词是制作起点，不保证模型严格隔离乐器。
-2. 在仓库根目录，用已有安装 `aiohttp`、`numpy`、`soundfile` 的 Python 执行：
+2. 在仓库根目录，用本仓库 `.venv` 中的 Python 执行：
 
    ```bash
-   python tools/generate-ace-native-stems.py \
+   .venv/bin/python tools/generate-ace-native-stems.py \
      --context /path/to/context.wav \
      --plan docs/examples/ace-native-stems-plan.json \
      --endpoint http://127.0.0.1:8001 \
@@ -39,7 +39,7 @@
 本地文件入口：将“制作入口”改为 **“立体声 · 本地自动分离”**，选择或拖入音频，完成导入后点击 **“本地自动分离”**。导入动作本身不表示分离已完成。也可使用现有协调工具：
 
 ```bash
-python tools/spatial-mix-agent.py \
+.venv/bin/python tools/spatial-mix-agent.py \
   --input /path/to/stereo.wav \
   --source-route separate \
   --output /path/to/new-mix-run \
@@ -47,6 +47,8 @@ python tools/spatial-mix-agent.py \
   --preview-3d \
   --spatial-layout content
 ```
+
+Windows 对应 Python 路径为 `.venv\Scripts\python.exe`。只有 CLI 的 `--preview-3d` 需要另在同一 `.venv` 安装 Playwright（`.venv/bin/python -m pip install playwright`），并用 `--chromium /absolute/path/to/chromium` 指定已有兼容浏览器；或自行执行 `.venv/bin/python -m playwright install chromium` 安装它。常规浏览器界面不需要 Playwright。
 
 本地网关须已运行；`--base` 默认 `http://127.0.0.1:8773`。输出目录须为新目录。`--preview-3d --spatial-layout content` 生成内容适配的空间试听候选，不代表最终采用；浏览器预览复用已有兼容 Chromium，不自动安装。
 
