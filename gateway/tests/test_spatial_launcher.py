@@ -49,7 +49,7 @@ class LauncherTests(unittest.TestCase):
                 launcher.configuration(self.args)
             config.write_text(json.dumps({"weights": str(self.weights), "ffmpeg": str(self.ffmpeg)}))
             self.args.weights = self.args.ffmpeg = None
-            self.assertEqual(launcher.configuration(self.args)["weights"], self.weights)
+            self.assertEqual(launcher.configuration(self.args)["weights"], self.weights.resolve())
 
     def test_requires_own_private_venv(self):
         with patch.object(launcher, "ROOT", self.root):
