@@ -52,11 +52,21 @@ def json_object(path):
     return value
 
 
-def wav_matches(path, channels, frames, subtype):
+def wav_matches(path, channels, frames, subtype, rate=RATE):
     info = sf.info(path)
-    return (info.samplerate, info.channels, info.frames, info.subtype) == (RATE, channels, frames, subtype) \
+    return (info.samplerate, info.channels, info.frames, info.subtype) == (rate, channels, frames, subtype) \
         and info.format in ("WAV", "WAVEX") \
         and path.stat().st_size >= 44 + frames*channels*{"PCM_16": 2, "PCM_24": 3, "FLOAT": 4}[subtype]
+
+
+@lru_cache(maxsize=256)
+def checked_file_hash(path, signature):
+    return file_hash(path)
+
+
+def current_file_hash(path):
+    stamp = path.stat()
+    return checked_file_hash(path, (stamp.st_mtime_ns, stamp.st_ctime_ns, stamp.st_size))
 
 
 @lru_cache(maxsize=128)
@@ -126,6 +136,49 @@ def outdated_render_geometry(folder):
         return False
 
 
+def binaural_complete(folder, scene_hash, frames, expected_audio_hash=None):
+    try:
+        receipt = json_object(folder / "binaural.json")
+        quality = receipt.get("quality")
+        if receipt.get("sceneHash") != scene_hash or receipt.get("stereoGeometry") != STEREO_GEOMETRY \
+                or not isinstance(quality, dict) or quality.get("passed") is not True:
+            return False
+        digest = quality.get("audioSha256")
+        return isinstance(digest, str) and re.fullmatch("[a-f0-9]{64}", digest) is not None \
+            and (expected_audio_hash is None or digest == expected_audio_hash) \
+            and wav_matches(folder / "binaural.wav", 2, frames, "PCM_16") \
+            and current_file_hash(folder / "binaural.wav") == digest \
+            and zip_has(folder / "package.zip", ["binaural.wav", "binaural.json", "scene.json"])
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError, zipfile.BadZipFile):
+        return False
+
+
+def mix_complete(project, root, run):
+    try:
+        mix_id = run["id"]
+        if not isinstance(mix_id, str) or not re.fullmatch("[a-f0-9]{64}", mix_id):
+            return False
+        folder = root / project["id"] / "mixes" / mix_id
+        analysis, plan, report = [json_object(folder / name) for name in ("analysis.json", "plan.json", "mix.json")]
+        if report.get("schema") != "spatial-mix-result-v1" or report.get("status") != "awaiting-listening" \
+                or run.get("status") != "awaiting-listening" or report.get("plan") != plan \
+                or canonical_hash(plan) != mix_id or canonical_hash(analysis) != run["analysisHash"] \
+                or plan.get("analysisHash") != run["analysisHash"]:
+            return False
+        names = ["baseline.wav", "candidate.wav", "baseline_matched.wav", "candidate_matched.wav",
+                 "baseline_mono.wav", "candidate_mono.wav", "residual.wav",
+                 *[f"processed_stems/{sid}.wav" for sid in project_stem_ids(project)]]
+        frames = analysis["original"]["frames"]
+        return set(report["outputFiles"]) == set(names) \
+            and all(wav_matches(folder / name, 2, frames, "FLOAT", rate=44100) for name in names) \
+            and all(current_file_hash(path) == report["hashes"][key] for key, path in (
+                ("original", root / project["id"] / "original.wav"),
+                ("baseline", folder / "baseline.wav"), ("candidate", folder / "candidate.wav"))) \
+            and zip_has(folder / "bundle.zip", [*names, "analysis.json", "plan.json", "mix.json"])
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError, zipfile.BadZipFile):
+        return False
+
+
 def artifacts(project, root):
     project["artifactWarnings"] = []
     project["audioWarnings"] = []
@@ -164,19 +217,15 @@ def artifacts(project, root):
         if receipt.get("stereoGeometry") != STEREO_GEOMETRY:
             project["artifactWarnings"].append("双耳立体声空间几何算法已更新，请重新渲染；旧文件已保留。")
             return result
-        quality = receipt.get("quality")
         frames = json_object(folder/"render.json")["audio"]["frames"]
-        if receipt.get("sceneHash") != project["sceneHash"] or not isinstance(quality, dict) \
-                or quality.get("passed") is not True \
-                or not isinstance(quality.get("audioSha256"), str) \
-                or not re.fullmatch("[a-f0-9]{64}", quality["audioSha256"]) \
-                or (active is not None and quality["audioSha256"] != active.get("audioSha256")) \
-                or not wav_matches(published/"binaural.wav", 2, frames, "PCM_16") \
-                or not zip_has(published/"package.zip", ["binaural.wav", "binaural.json", "scene.json"]):
+        if not binaural_complete(published, project["sceneHash"], frames,
+                                 active["audioSha256"] if active is not None else None):
             raise ValueError("双耳版本不完整。")
         for key, name in (("binauralUrl", "binaural.wav"), ("binauralReportUrl", "binaural.json"), ("packageUrl", "package.zip")):
             result[key] = f"{base}{suffix}/{name}"
     except (OSError, ValueError, TypeError, KeyError, RuntimeError, zipfile.BadZipFile):
+        if published == folder:
+            result.pop("packageUrl", None)
         project["artifactWarnings"].append("双耳导出缺失或记录损坏，已保留可用的扬声器文件。")
     return result
 
@@ -350,6 +399,8 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
             response = web.json_response({"error": exc.text[:240]}, status=exc.status)
         except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
             response = web.json_response({"error": str(exc)[:240]}, status=400)
+        except OSError:
+            response = web.json_response({"error": "本地文件读写失败，请检查磁盘空间或文件权限。"}, status=500)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Cache-Control"] = "no-store"
@@ -365,7 +416,10 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
 
     def reply(project, status=200):
         project["artifacts"] = artifacts(project, output)
-        return web.json_response(project, status=status)
+        runs = [run for run in project.get("mixRuns", []) if mix_complete(project, output, run)]
+        if len(runs) != len(project.get("mixRuns", [])):
+            project["artifactWarnings"].append("部分混音候选缺失或损坏，已隐藏试听；可重新处理相同提案恢复，原文件保留。")
+        return web.json_response({**project, **({"mixRuns": runs} if "mixRuns" in project else {})}, status=status)
 
     def running(project):
         if project["state"] in ("separating", "rendering", "analyzing", "mixing"):
@@ -375,15 +429,47 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
         if "expectedSceneHash" in value and value["expectedSceneHash"] != project.get("sceneHash"):
             raise web.HTTPConflict(text="声场已被其他操作更新，请重新载入后再保存。")
 
-    def launch(coro):
-        task = asyncio.create_task(coro)
-        tasks.add(task)
-        task.add_done_callback(tasks.discard)
+    def require_scene_mix(project, scene):
+        if not scene.get("mixId"):
+            return
+        run = next((run for run in project.get("mixRuns", []) if run["id"] == scene["mixId"]), None)
+        if run is None or not mix_complete(project, output, run):
+            raise ValueError("所选混音候选缺失或损坏，请重新处理提案，或恢复未混音的声场。")
+
+    async def launch(project, worker, updates, *args):
+        async def work():
+            try:
+                await worker(project, *args)
+            except Exception as exc:
+                project.update(state="error", error=str(exc)[:240])
+            finally:
+                try:
+                    save(project, output)
+                except OSError:
+                    project.update(state="error", error="本地项目保存失败，请检查磁盘空间或文件权限后重试。")
+                finally:
+                    work_lock.release()
+
+        if work_lock.locked():
+            raise web.HTTPConflict(text="另一本地任务正在运行。")
+        await work_lock.acquire()
+        before = project.copy()
+        try:
+            project.update(updates)
+            save(project, output)
+            task = asyncio.create_task(work())
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+        except BaseException:
+            project.clear()
+            project.update(before)
+            work_lock.release()
+            raise
 
     async def status(request):
         ready = python.is_file() and weights.is_file() and bool(ffmpeg)
         return web.json_response({
-            "app": "neural-spatial-audio", "version": "0.8.3", "workflow": WORKFLOW,
+            "app": "neural-spatial-audio", "version": "0.8.4", "workflow": WORKFLOW,
             "environment": environment_status(python),
             "stereoGeometry": STEREO_GEOMETRY,
             "ready": True, "working": work_lock.locked(),
@@ -620,8 +706,6 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
                     proc.kill()
                 await proc.wait()
             shutil.rmtree(stage, ignore_errors=True)
-            save(project, output)
-            work_lock.release()
 
     async def separate(request):
         value = await mix_body(request, {"workflow"})
@@ -640,11 +724,8 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
             raise web.HTTPConflict(text="另一本地任务正在运行。")
         if shutil.disk_usage(output).free < (folder / "original.wav").stat().st_size * 16 + 512 * 1024 ** 2:
             raise ValueError("输出盘空间不足；未启动分离。")
-        await work_lock.acquire()
-        project.update(state="separating", error=None, progress={
-            "stage": "separating", "fraction": 0, "message": "正在本地CPU分离；声部为模型估计。"})
-        save(project, output)
-        launch(separate_task(project))
+        await launch(project, separate_task, {"state": "separating", "error": None, "progress": {
+            "stage": "separating", "fraction": 0, "message": "正在本地CPU分离；声部为模型估计。"}})
         return reply(project, 202)
 
     async def update_scene(request):
@@ -722,9 +803,12 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
                         bundle.write(audio / name, name)
                 dest = folder / "mixes"
                 dest.mkdir(exist_ok=True)
+                if (dest / mix_id).exists():
+                    (dest / mix_id).rename(dest / ("incomplete-" + uuid.uuid4().hex))
                 audio.rename(dest / mix_id)
                 base = f"/api/spatial/projects/{project['id']}/files/mixes/{mix_id}"
-                project.setdefault("mixRuns", []).append({
+                project["mixRuns"] = [run for run in project.get("mixRuns", []) if run["id"] != mix_id]
+                project["mixRuns"].append({
                     "id": mix_id, "analysisHash": job["plan"]["analysisHash"],
                     "intent": job["plan"]["intent"], "status": result["status"],
                     "createdAt": time.time(), "metrics": result["metrics"],
@@ -753,8 +837,6 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
                     proc.kill()
                 await proc.wait()
             shutil.rmtree(stage, ignore_errors=True)
-            save(project, output)
-            work_lock.release()
 
     async def mix_analyze(request):
         project = get(request)
@@ -766,11 +848,9 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
             if not isinstance(reference_id, str) or reference_id not in projects or reference_id == project["id"]:
                 raise ValueError("参考音频须为另一本机已导入项目。")
             reference = str(output / reference_id / "original.wav")
-        await work_lock.acquire()
-        project.update(state="analyzing", error=None, progress={
-            "stage": "analyzing", "fraction": 0, "message": "正在测量原音频、分轨与重建残差…"})
-        save(project, output)
-        launch(mix_worker(project, {"mode": "analyze", "reference": reference}))
+        await launch(project, mix_worker, {"state": "analyzing", "error": None, "progress": {
+            "stage": "analyzing", "fraction": 0, "message": "正在测量原音频、分轨与重建残差…"}},
+            {"mode": "analyze", "reference": reference})
         return reply(project, 202)
 
     async def mix_plan(request):
@@ -793,20 +873,19 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
             raise ValueError("请先分析本地音频。")
         plan = validate_plan(value.get("plan"), project["analysis"])
         mix_id = canonical_hash(plan)
-        if any(run["id"] == mix_id for run in project.get("mixRuns", [])):
+        complete = [run for run in project.get("mixRuns", []) if mix_complete(project, output, run)]
+        if any(run["id"] == mix_id for run in complete):
             project.update(state="ready", error=None, mixPlan=plan, mixResultId=mix_id, progress={
                 "stage": "mix-ready", "fraction": 1, "message": "已复用相同提案的完成版本，可比较试听。"})
             save(project, output)
             return reply(project)
-        if sum(run.get("analysisHash") == plan["analysisHash"] for run in project.get("mixRuns", [])) >= 2:
+        if sum(run.get("analysisHash") == plan["analysisHash"] for run in complete) >= 2:
             raise ValueError("本轮测量已保存两个候选；请先比较现有版本。")
         if shutil.disk_usage(output).free < (output / project["id"] / "original.wav").stat().st_size * 24 + 512 * 1024 ** 2:
             raise ValueError("输出盘空间不足，未启动混音处理。")
-        await work_lock.acquire()
-        project.update(state="mixing", error=None, mixPlan=plan, progress={
-            "stage": "mixing", "fraction": 0, "message": "正在本地执行DSP、真峰值复测与等响度匹配…"})
-        save(project, output)
-        launch(mix_worker(project, {"mode": "process", "plan": plan, "analysis": project["analysis"]}))
+        await launch(project, mix_worker, {"state": "mixing", "error": None, "mixPlan": plan, "progress": {
+            "stage": "mixing", "fraction": 0, "message": "正在本地执行DSP、真峰值复测与等响度匹配…"}},
+            {"mode": "process", "plan": plan, "analysis": project["analysis"]})
         return reply(project, 202)
 
     async def mix_apply(request):
@@ -829,6 +908,7 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
             scene = json.loads(json.dumps(project["scene"]))
             scene["mixId"] = mix_id
             scene = validate_scene(scene, project)
+            require_scene_mix(project, scene)
             content_plan = None
             if value.get("layout") in ("content", "spacious"):
                 run = next(run for run in project["mixRuns"] if run["id"] == mix_id)
@@ -899,8 +979,6 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
         finally:
             if stage and stage.exists():
                 shutil.rmtree(stage)
-            save(project, output)
-            work_lock.release()
 
     async def render(request):
         project = get(request)
@@ -910,11 +988,9 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
         if work_lock.locked():
             raise web.HTTPConflict(text="另一本地任务正在运行。")
         expected_scene(project, await request.json() if request.can_read_body else {})
-        await work_lock.acquire()
-        project.update(state="rendering", error=None,
-                       progress={"stage": "rendering", "fraction": 0, "message": "正在本地编码全景声"})
-        save(project, output)
-        launch(render_task(project))
+        require_scene_mix(project, project["scene"])
+        await launch(project, render_task, {"state": "rendering", "error": None,
+            "progress": {"stage": "rendering", "fraction": 0, "message": "正在本地编码全景声"}})
         return reply(project, 202)
 
     async def online_prepare(request):
@@ -1027,14 +1103,15 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
                 receipt_folder /= "v2"
             if not render_complete(receipt_folder, rendered[1]):
                 raise web.HTTPNotFound()
-            if rendered[2].startswith("binaural"):
-                try:
-                    if json_object(target.parent / "binaural.json").get("stereoGeometry") != STEREO_GEOMETRY:
-                        raise web.HTTPNotFound()
-                except (OSError, ValueError):
+            if rendered[2].startswith("binaural") or (
+                    rendered[2] == "package.zip" and (receipt_folder / "binaural.json").exists()):
+                frames = json_object(receipt_folder / "render.json")["audio"]["frames"]
+                if not binaural_complete(target.parent, rendered[1], frames):
                     raise web.HTTPNotFound()
-        if mixed and not any(run["id"] == mixed[1] for run in project.get("mixRuns", [])):
-            raise web.HTTPNotFound()
+        if mixed:
+            run = next((run for run in project.get("mixRuns", []) if run["id"] == mixed[1]), None)
+            if run is None or not mix_complete(project, output, run):
+                raise web.HTTPNotFound()
         return web.FileResponse(target)
 
     async def static(request):

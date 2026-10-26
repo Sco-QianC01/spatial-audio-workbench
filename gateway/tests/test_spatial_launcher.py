@@ -104,7 +104,7 @@ class EnvironmentContractTests(AioHTTPTestCase):
 
     async def test_status_reports_actual_environment_and_static_boundary(self):
         data = await (await self.client.get("/api/spatial/status")).json()
-        self.assertEqual(data["version"], "0.8.3")
+        self.assertEqual(data["version"], "0.8.4")
         self.assertEqual(data["environment"]["sourceRoot"], str(ROOT))
         self.assertEqual(data["environment"]["python"], sys.executable)
         self.assertEqual(data["environment"]["prefix"], sys.prefix)

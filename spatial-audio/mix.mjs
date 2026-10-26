@@ -4,7 +4,7 @@ const fixed=(value,digits=1)=>Number.isFinite(value)?value.toFixed(digits):'—'
 
 export function initMix({getState,run,render,message}){
   let draft=null,planKey='',projectId=null,versionId=null,latestRunId=null,side='a',switchToken=0,switching=false;
-  let refreshState=[];
+  let refreshState=[],playbackIntent=0;
   const audio=$('mix-audio');
   const selected=()=>getState().project?.mixRuns?.find(value=>value.id===versionId);
   function playback(next=side,position=null){
@@ -12,7 +12,7 @@ export function initMix({getState,run,render,message}){
     const entry=selected(),mono=$('mix-mono').checked;
     const url=entry?.urls[(next==='a'?'baseline':'candidate')+(mono?'Mono':'')];
     if(audio.getAttribute('src')===url){if(position!==null)audio.currentTime=position;return;}
-    const token=++switchToken,at=position??(audio.currentTime||0),resume=!audio.paused;
+    const token=++switchToken,intent=playbackIntent,at=position??(audio.currentTime||0),resume=!audio.paused;
     audio.pause();side=next;
     for(const key of ['a','b']){$(`mix-${key}`).classList.toggle('active',side===key);$(`mix-${key}`).setAttribute('aria-pressed',String(side===key));}
     if(!url){audio.removeAttribute('src');audio.load();return;}
@@ -29,7 +29,7 @@ export function initMix({getState,run,render,message}){
       if(token!==switchToken)return;
       audio.currentTime=Math.min(at,Math.max(0,audio.duration-.01));
       finished();
-      if(resume)try{await audio.play();}catch(error){message(`比较试听未启动：${error.message}`,true);}
+      if(resume&&intent===playbackIntent)try{await audio.play();}catch(error){message(`比较试听未启动：${error.message}`,true);}
     };
     audio.onerror=()=>{if(token!==switchToken)return;finished();message('比较音频读取失败，请重新载入项目。',true);};
     audio.load();
@@ -121,6 +121,10 @@ export function initMix({getState,run,render,message}){
     }
     parameters(project);
     const runs=project?.mixRuns??[];
+    if(!runs.length&&(audio.getAttribute('src')||switching)){
+      switchToken++;playbackIntent++;switching=false;side='a';
+      audio.pause();audio.removeAttribute('src');audio.load();
+    }
     $('mix-comparison').hidden=!runs.length;
     const latest=runs.at(-1)?.id??null;
     if(latest!==latestRunId||!runs.some(value=>value.id===versionId))versionId=runs.find(value=>value.id===project?.mixResultId)?.id??latest;
@@ -161,5 +165,5 @@ export function initMix({getState,run,render,message}){
   for(const key of ['a','b'])$(`mix-${key}`).addEventListener('click',()=>playback(key));
   $('mix-apply').addEventListener('click',safe(async()=>{await run('apply',{mixId:versionId,layout:$('mix-layout').value});await render();}));
   $('mix-revert').addEventListener('click',safe(()=>run('apply',{mixId:null})));
-  return {refresh};
+  return {refresh,cancelPendingPlayback(){playbackIntent++;}};
 }

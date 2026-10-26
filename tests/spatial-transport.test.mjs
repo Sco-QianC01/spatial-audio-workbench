@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {moveKeyframeTime} from '../spatial-audio/automation.mjs';
 
 const source=readFileSync(new URL('../spatial-audio/app.mjs',import.meta.url),'utf8');
 function extract(name){
@@ -12,7 +13,7 @@ function extract(name){
 }
 function transport({playing=false,busy=false,withScene=true}={}){
   const create=new Function('options',`
-    let busy=options.busy,scene=options.withScene?{durationSeconds:30}:null;
+    let busy=options.busy,scene=options.withScene?{durationSeconds:30}:null,mixControls;
     let playhead=12,playbackId='source-audio';
     const make=(id,src,duration)=>({id,duration,currentTime:12,paused:true,dataset:{},getAttribute:name=>name==='src'?src:null,pause(){this.paused=true},async play(){this.paused=false}});
     const nodes={'source-audio':make('source-audio','/original.wav',30),'preview':make('preview','/hrtf.wav',30.25),'stem-audio':make('stem-audio',null,30),'mix-audio':make('mix-audio','/compare.wav',30),seek:{},'time-current':{}};
@@ -121,7 +122,7 @@ test('late play event from an already paused source cannot steal or stop current
   assert.ok(start>=0,'Missing actual media event binding');
   const end=source.indexOf('\nfunction stopPlayhead()',start);
   const create=new Function(`
-    let playbackId='preview',stops=0,starts=0,syncs=0;
+    let playbackId='preview',stops=0,starts=0,syncs=0,mixControls;
     const make=id=>({id,paused:id!=='preview',pauseCalls:0,listeners:{},getAttribute:()=>'/audio.wav',pause(){this.paused=true;this.pauseCalls++},addEventListener(event,fn){this.listeners[event]=fn}});
     const nodes=Object.fromEntries(['preview','source-audio','stem-audio','mix-audio'].map(id=>[id,make(id)]));
     const $=id=>nodes[id],stopPlayhead=()=>stops++,startPlayhead=()=>starts++,syncPlayhead=()=>syncs++,updateTransport=()=>{};
@@ -166,4 +167,22 @@ test('source switch detects actual pending-event playback but never treats mix r
   await mixOnly.selectPlayback('preview');
   assert.equal(mixOnly.nodes.preview.paused,true,'independent mix playback must not start HRTF');
   assert.equal(mixOnly.nodes['mix-audio'].paused,true);assert.equal(mixOnly.state().playbackId,'preview');
+});
+
+test('keyframe time editing synchronizes the active reference audio and visual cursor',()=>{
+  const handler=source.split('\n').find(line=>line.startsWith("$('keyframe-time').addEventListener('change'"));
+  const run=new Function('moveKeyframeTime','playing',`
+    let scene={durationSeconds:30,objects:[{id:'x',keyframes:[{timeSeconds:0},{timeSeconds:5},{timeSeconds:30}]}]};
+    let selectedTime=5,playhead=5,selectedId='x',busy=false,revision=0,change;
+    const audio={currentTime:5,paused:!playing,duration:30};
+    const nodes={'keyframe-time':{value:'12',addEventListener(type,fn){change=fn}},seek:{},'time-current':{}};
+    const $=id=>nodes[id],currentObject=()=>scene.objects[0],transportAudio=()=>audio;
+    const clearPreview=()=>{playhead=0},renderStems=()=>{},renderParameters=()=>{},scheduleDraw=()=>{},message=()=>{},draw=()=>{},time=String;
+    const replaceCurrent=next=>{scene.objects[0]=next};
+    ${extract('seekTo')}
+    ${extract('changed')}
+    ${handler}
+    change();return {selectedTime,playhead,audioTime:audio.currentTime,paused:audio.paused,revision};
+  `);
+  for(const playing of [false,true])assert.deepEqual(run(moveKeyframeTime,playing),{selectedTime:12,playhead:12,audioTime:12,paused:!playing,revision:1});
 });

@@ -27,7 +27,7 @@ const speakerLayout=()=>scene?.speakerLayout??'7.1.4';
 const currentObject=()=>scene?.objects.find(o=>o.id===selectedId);
 function message(text,error=false,result=null){
   if(!error&&result?.artifactWarnings?.length){
-    text=`${result.artifacts?.surroundUrl?'扬声器通道可用。':'项目已载入。'} 导出校验提示：${result.artifactWarnings.join('；')}。请重新渲染以更新或恢复导出。`;error=true;
+    text=`${result.artifacts?.surroundUrl?'扬声器通道可用。':'项目已载入。'} 导出校验提示：${result.artifactWarnings.join('；')}。请按提示重新处理候选或重新渲染，以恢复对应输出。`;error=true;
   }
   $('status').textContent=text;$('status').classList.toggle('error',error);
 }
@@ -234,7 +234,7 @@ function renderStems(){
     const meta=document.createElement('small');meta.textContent=`${object.azimuthDeg}° / ${object.elevationDeg}°${object.keyframes?.length?' · 轨迹':''}`;text.append(meta);select.append(dot,text);
     select.addEventListener('click',()=>selectKeyframe(object.id,playhead,false));
     const listen=document.createElement('button');listen.className='icon-button';listen.textContent='▷';listen.title=`试听${trackLabel(object.id)}`;listen.setAttribute('aria-label',listen.title);listen.disabled=busy||!object.audioUrl;
-    listen.addEventListener('click',async()=>{const latest=scene?.objects.find(value=>value.id===object.id);if(!latest)return;const audio=$('stem-audio');$('preview').pause();$('source-audio').pause();audio.src=latest.audioUrl;audio.dataset.referenceLabel=trackLabel(object.id);audio.hidden=false;try{await audio.play();}catch(error){if(error.name!=='AbortError'||(!audio.paused&&audio===transportAudio()))message(`分轨试听失败：${error.message}`,true);}});
+    listen.addEventListener('click',async()=>{const latest=scene?.objects.find(value=>value.id===object.id);if(!latest)return;mixControls?.cancelPendingPlayback();const audio=$('stem-audio');$('preview').pause();$('source-audio').pause();audio.src=latest.audioUrl;audio.dataset.referenceLabel=trackLabel(object.id);audio.hidden=false;try{await audio.play();}catch(error){if(error.name!=='AbortError'||(!audio.paused&&audio===transportAudio()))message(`分轨试听失败：${error.message}`,true);}});
     const mute=document.createElement('button');mute.className='icon-button';mute.textContent='M';mute.title='静音';mute.setAttribute('aria-label',`${trackLabel(object.id)}静音`);mute.setAttribute('aria-pressed',String(Boolean(object.muted)));mute.disabled=busy;
     mute.addEventListener('click',()=>{const latest=scene?.objects.find(value=>value.id===object.id);if(latest){latest.muted=!latest.muted;changed();}});row.append(select,listen,mute);$('stems').append(row);
   }
@@ -423,7 +423,7 @@ function seekTo(at){
 function replaceCurrent(next){scene.objects[scene.objects.findIndex(o=>o.id===selectedId)]=next;}
 $('add-keyframe').addEventListener('click',()=>{const object=currentObject();if(!object||busy)return;try{const next=upsertKeyframe(object,Math.min(scene.durationSeconds,playhead),scene.durationSeconds);replaceCurrent(next);selectedTime=next.keyframes.reduce((a,f)=>Math.abs(f.timeSeconds-playhead)<Math.abs(a-playhead)?f.timeSeconds:a,0);changed();}catch(error){message(error.message,true);}});
 $('remove-keyframe').addEventListener('click',()=>{const object=currentObject();if(!object||busy)return;try{const index=object.keyframes.findIndex(f=>Math.abs(f.timeSeconds-selectedTime)<1e-8);replaceCurrent(removeKeyframe(object,index));selectedTime=object.keyframes[Math.max(0,index-1)].timeSeconds;changed();}catch(error){message(error.message,true);}});
-$('keyframe-time').addEventListener('change',()=>{const object=currentObject();if(!object||busy)return;try{const index=object.keyframes.findIndex(f=>Math.abs(f.timeSeconds-selectedTime)<1e-8),next=moveKeyframeTime(object,index,Number($('keyframe-time').value),scene.durationSeconds);replaceCurrent(next);selectedTime=next.keyframes[index].timeSeconds;playhead=selectedTime;changed();}catch(error){message(error.message,true);renderParameters();}});
+$('keyframe-time').addEventListener('change',()=>{const object=currentObject();if(!object||busy)return;try{const index=object.keyframes.findIndex(f=>Math.abs(f.timeSeconds-selectedTime)<1e-8),next=moveKeyframeTime(object,index,Number($('keyframe-time').value),scene.durationSeconds);replaceCurrent(next);selectedTime=next.keyframes[index].timeSeconds;changed();seekTo(selectedTime);}catch(error){message(error.message,true);renderParameters();}});
 async function loadOnline(audioUrl,{jobId,workflow}={}){
   if(busy)throw new Error('请等待当前本地任务完成。');
   await saveEdits();
@@ -474,6 +474,7 @@ function transportAudio(){
 }
 async function selectPlayback(id){
   if(busy||!['preview','source-audio','stem-audio'].includes(id)||!$(id).getAttribute('src'))return;
+  mixControls?.cancelPendingPlayback();
   const playing=['preview','source-audio','stem-audio'].some(source=>!$(source).paused);
   stopPlayhead();playbackId=id;
   for(const other of ['preview','source-audio','stem-audio','mix-audio'])$(other).pause();
@@ -500,11 +501,12 @@ function syncPlayhead(audio){
 }
 $('seek').addEventListener('input',()=>seekTo(Number($('seek').value)));
 $('playback-source').addEventListener('change',async event=>{try{await selectPlayback(event.target.value);}catch(error){updateTransport();message(`试听失败：${error.message}`,true);}});
-$('play-pause').addEventListener('click',async()=>{const audio=transportAudio();if(!audio)return;try{if(audio.paused){audio.currentTime=Math.min(playhead,Number.isFinite(audio.duration)?audio.duration:playhead);await audio.play();}else audio.pause();}catch(error){if(error.name!=='AbortError'||(!audio.paused&&audio===transportAudio()))message(`试听失败：${error.message}`,true);}});
+$('play-pause').addEventListener('click',async()=>{const audio=transportAudio();if(!audio)return;try{if(audio.paused){mixControls?.cancelPendingPlayback();audio.currentTime=Math.min(playhead,Number.isFinite(audio.duration)?audio.duration:playhead);await audio.play();}else audio.pause();}catch(error){if(error.name!=='AbortError'||(!audio.paused&&audio===transportAudio()))message(`试听失败：${error.message}`,true);}});
 for(const id of ['preview','source-audio','stem-audio','mix-audio']){
   const audio=$(id);
   audio.addEventListener('play',()=>{
     if(audio.paused)return;
+    if(id!=='mix-audio')mixControls?.cancelPendingPlayback();
     stopPlayhead();if(id!=='mix-audio')playbackId=id;
     for(const other of ['preview','source-audio','stem-audio','mix-audio'])if(other!==id)$(other).pause();
     if(id!=='mix-audio'){syncPlayhead(audio);startPlayhead();}updateTransport();

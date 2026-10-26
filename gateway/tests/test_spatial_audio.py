@@ -390,6 +390,59 @@ class BinauralRaceTests(AioHTTPTestCase):
         self.assertEqual(len(value["audioSha256"]), 64)
         self.assertTrue(value["ffmpegVersion"].startswith("ffmpeg version"))
 
+    async def test_changed_binaural_content_is_hidden_and_denied_without_losing_healthy_exports(self):
+        base = "/api/spatial/projects/" + self.project["id"]
+        speaker_links = (await (await self.client.get(base)).json())["artifacts"]
+
+        async def upload(level):
+            payload = io.BytesIO()
+            audio = np.zeros((16800, 2))
+            audio[:4800] = level
+            sf.write(payload, audio, RATE, format="WAV", subtype="PCM_16")
+            response = await self.client.post(base + "/binaural", data=payload.getvalue(),
+                headers={"X-Spatial-Geometry": STEREO_GEOMETRY,
+                         "X-Scene-Hash": self.project["sceneHash"]})
+            self.assertEqual(response.status, 200, await response.text())
+            return (await response.json())["artifacts"]
+
+        old_links = await upload(.01)
+        publication_keys = ("binauralUrl", "binauralReportUrl", "packageUrl")
+        old_data = {key: await (await self.client.get(old_links[key])).read()
+                    for key in publication_keys}
+        current_links = await upload(.02)
+        self.assertNotEqual(current_links["binauralUrl"], old_links["binauralUrl"])
+        path = self.root / self.project["id"] / current_links["binauralUrl"].split("/files/", 1)[1]
+        before = sf.info(path)
+        original_bytes = path.read_bytes()
+        audio, rate = sf.read(path, dtype="float32", always_2d=True)
+        audio[:4800] *= .5
+        sf.write(path, audio, rate, format="WAV", subtype=before.subtype)
+        after = sf.info(path)
+        self.assertEqual((after.format, after.subtype, after.samplerate, after.channels, after.frames),
+                         (before.format, before.subtype, before.samplerate, before.channels, before.frames))
+        self.assertNotEqual(path.read_bytes(), original_bytes)
+
+        state = await (await self.client.get(base)).json()
+        for key in ("binauralUrl", "binauralReportUrl"):
+            with self.subTest(hidden_link=key):
+                self.assertNotIn(key, state["artifacts"])
+        with self.subTest(speaker_package_restored=True):
+            self.assertEqual(state["artifacts"]["packageUrl"], speaker_links["packageUrl"])
+        with self.subTest(corruption_warning=True):
+            self.assertTrue(state["artifactWarnings"])
+        for key in publication_keys:
+            with self.subTest(corrupted_publication=key):
+                response = await self.client.get(current_links[key])
+                self.assertEqual(response.status, 404)
+            with self.subTest(previous_healthy_revision=key):
+                response = await self.client.get(old_links[key])
+                self.assertEqual(response.status, 200)
+                self.assertEqual(await response.read(), old_data[key])
+        for key, url in speaker_links.items():
+            with self.subTest(healthy_speaker_export=key):
+                self.assertEqual(state["artifacts"][key], url)
+                self.assertEqual((await self.client.get(url)).status, 200)
+
     async def test_upload_rejects_float_wav_and_preserves_published_audio(self):
         previous = self.rendered / "binaural.wav"
         previous.write_bytes(b"existing published output")

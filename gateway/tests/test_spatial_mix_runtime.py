@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import unittest
@@ -18,7 +19,7 @@ from aiohttp.test_utils import TestClient, TestServer
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from spatial_audio import NATIVE_SCHEMA, canonical_hash, default_scene
 from gateway.tests.test_spatial_native_workflow import fixture_bundle
-from spatial_runtime import create_app
+from spatial_runtime import create_app, save
 
 spec = importlib.util.spec_from_file_location("mix_agent", Path(__file__).resolve().parents[2] /
                                              "tools/spatial-mix-agent.py")
@@ -87,6 +88,136 @@ class MixRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_plan_requires_real_analysis(self):
         response = await self.client.post(self.base + "/mix/plan", json={"intent": "preserve"})
         self.assertEqual(response.status, 400)
+
+    async def test_failed_initial_save_rolls_back_state_and_releases_work_lock(self):
+        before = await (await self.client.get(self.base)).json()
+        for endpoint in ("/mix/analyze", "/render"):
+            with self.subTest(endpoint=endpoint), patch("spatial_runtime.save", side_effect=OSError("disk full")):
+                response = await self.client.post(self.base + endpoint, json={})
+                self.assertEqual(response.status, 500)
+            status = await (await self.client.get("/api/spatial/status")).json()
+            self.assertFalse(status["working"])
+            after = await (await self.client.get(self.base)).json()
+            for key in ("state", "error", "scene", "sceneHash", "progress"):
+                self.assertEqual(after.get(key), before.get(key), key)
+        response = await self.client.post(self.base + "/mix/analyze", json={})
+        self.assertEqual(response.status, 202)
+        await self.completed()
+
+    async def test_failed_worker_save_is_visible_and_does_not_block_next_task(self):
+        def fail_final_save(project, root):
+            if project["state"] != "analyzing":
+                raise OSError("disk full")
+            save(project, root)
+
+        with patch("spatial_runtime.save", side_effect=fail_final_save):
+            response = await self.client.post(self.base + "/mix/analyze", json={})
+            self.assertEqual(response.status, 202)
+            for _ in range(150):
+                status = await (await self.client.get("/api/spatial/status")).json()
+                if not status["working"]:
+                    break
+                await asyncio.sleep(.1)
+            self.assertFalse(status["working"])
+            project = await (await self.client.get(self.base)).json()
+            self.assertEqual(project["state"], "error")
+            self.assertIn("保存", project["error"])
+        response = await self.client.post(self.base + "/mix/analyze", json={})
+        self.assertEqual(response.status, 202)
+        await self.completed()
+
+    async def test_render_cleanup_failure_releases_work_lock(self):
+        def failed_render(scene, stems, stage):
+            stage.mkdir()
+            raise ValueError("injected render failure")
+
+        rmtree = shutil.rmtree
+        def failed_cleanup(path, *args, **kwargs):
+            if Path(path).name.startswith("tmp-"):
+                raise OSError("injected cleanup failure")
+            return rmtree(path, *args, **kwargs)
+
+        with patch("spatial_runtime.render_foa", side_effect=failed_render), \
+                patch("spatial_runtime.shutil.rmtree", side_effect=failed_cleanup):
+            response = await self.client.post(self.base + "/render", json={})
+            self.assertEqual(response.status, 202)
+            for _ in range(50):
+                status = await (await self.client.get("/api/spatial/status")).json()
+                if not status["working"]:
+                    break
+                await asyncio.sleep(.02)
+            self.assertFalse(status["working"])
+            project = await (await self.client.get(self.base)).json()
+            self.assertEqual(project["state"], "error")
+            self.assertIn("cleanup", project["error"])
+
+    async def test_slow_render_request_does_not_wait_for_or_overlap_a_newer_task(self):
+        started, release = asyncio.Event(), asyncio.Event()
+        async def slow_body():
+            yield b'{'
+            started.set()
+            await release.wait()
+            yield b'}'
+
+        pending = asyncio.create_task(self.client.post(self.base + "/render", data=slow_body(),
+                                                      headers={"Content-Type": "application/json"}))
+        await started.wait()
+        await asyncio.sleep(.02)
+        self.assertEqual((await self.client.post(self.base + "/mix/analyze", json={})).status, 202)
+        release.set()
+        response = await pending
+        self.assertEqual(response.status, 409)
+        await self.completed()
+
+    async def test_damaged_mix_is_not_published_applied_or_counted_and_can_be_rebuilt(self):
+        response = await self.client.post(self.base + "/mix/analyze", json={})
+        self.assertEqual(response.status, 202)
+        await self.completed()
+        response = await self.client.post(self.base + "/mix/plan", json={"intent": "preserve"})
+        plan = (await response.json())["mixPlan"]
+        response = await self.client.post(self.base + "/mix/process", json={"plan": plan})
+        self.assertEqual(response.status, 202)
+        processed = await self.completed()
+        run = processed["mixRuns"][-1]
+        candidate = self.folder / "mixes" / run["id"] / "candidate_matched.wav"
+        candidate.write_bytes(b"damaged cache")
+        hidden = await (await self.client.get(self.base)).json()
+        self.assertEqual(hidden["mixRuns"], [])
+        self.assertTrue(hidden["artifactWarnings"])
+        for name in ("candidate_matched.wav", "mix.json", "bundle.zip"):
+            response = await self.client.get(f"{self.base}/files/mixes/{run['id']}/{name}")
+            self.assertEqual(response.status, 404, name)
+        response = await self.client.post(self.base + "/mix/apply",
+                                         json={"mixId": run["id"], "layout": "preserve"})
+        self.assertEqual(response.status, 400)
+        response = await self.client.post(self.base + "/mix/process", json={"plan": plan})
+        self.assertEqual(response.status, 202)
+        rebuilt = await self.completed()
+        self.assertEqual(len(rebuilt["mixRuns"]), 1)
+        self.assertEqual(rebuilt["mixRuns"][0]["id"], run["id"])
+        self.assertEqual(sf.info(candidate).frames, 44100 * 3)
+        preserved = list((self.folder / "mixes").glob("incomplete-*/candidate_matched.wav"))
+        self.assertEqual(len(preserved), 1)
+        self.assertEqual(preserved[0].read_bytes(), b"damaged cache")
+        self.assertEqual(hashlib.sha256((self.folder / "original.wav").read_bytes()).hexdigest(),
+                         self.original_hash)
+
+    async def test_missing_mix_cache_does_not_consume_candidate_quota(self):
+        self.assertEqual((await self.client.post(self.base + "/mix/analyze", json={})).status, 202)
+        analyzed = await self.completed()
+        response = await self.client.post(self.base + "/mix/plan", json={"intent": "preserve"})
+        plan = (await response.json())["mixPlan"]
+        await self.client.close()
+        analyzed["mixRuns"] = [{"id": value * 64, "analysisHash": plan["analysisHash"],
+                                "status": "awaiting-listening"} for value in ("b", "c")]
+        (self.folder / "project.json").write_text(json.dumps(analyzed))
+        self.client = TestClient(TestServer(create_app(self.root, sys.executable, self.root / "no-weights")))
+        await self.client.start_server()
+        response = await self.client.post(self.base + "/mix/process", json={"plan": plan})
+        self.assertEqual(response.status, 202)
+        finished = await self.completed()
+        self.assertEqual(len(finished["mixRuns"]), 1)
+        self.assertEqual(finished["mixRuns"][0]["id"], canonical_hash(plan))
 
     async def test_stale_scene_save_and_mix_apply_cannot_overwrite_newer_edit(self):
         before = await (await self.client.get(self.base)).json()
