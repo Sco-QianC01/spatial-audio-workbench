@@ -108,7 +108,7 @@ class EnvironmentContractTests(AioHTTPTestCase):
         self.assertEqual(data["environment"]["sourceRoot"], str(ROOT))
         self.assertEqual(data["environment"]["python"], sys.executable)
         self.assertEqual(data["environment"]["prefix"], sys.prefix)
-        self.assertEqual(data["environment"]["separationPython"], "/missing/python")
+        self.assertEqual(data["environment"]["separationPython"], str(Path("/missing/python").absolute()))
         self.assertFalse(data["environment"]["isolated"])
         self.assertEqual((await self.client.get("/public/spatial-icon.svg")).status, 200)
         for path in ("music-prompt/style.css", "music-prompt/icon.svg", "run.py", ".runtime/config.json"):
