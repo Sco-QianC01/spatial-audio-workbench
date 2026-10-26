@@ -34,3 +34,28 @@ jobs:
       - run: .venv/bin/python -m pip install -r gateway/requirements-spatial.txt
       - run: .venv/bin/python -m pip install torch==2.9.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cpu
       - run: .venv/bin/python tools/run-gateway-tests.py --suite spatial
+
+  native-launcher:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            python: .venv/bin/python
+          - os: windows-latest
+            python: .venv/Scripts/python.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m venv .venv
+      - run: ${{ matrix.python }} -m pip install -r gateway/requirements-spatial.txt
+      - name: Check private environment and launcher contracts without model weights
+        run: >-
+          ${{ matrix.python }} -I -c
+          "import sys,site,unittest; from pathlib import Path;
+          assert Path(sys.prefix).resolve()==Path('.venv').resolve() and not site.ENABLE_USER_SITE;
+          sys.path.insert(0,'gateway');
+          suite=unittest.defaultTestLoader.discover('gateway/tests',pattern='test_spatial_launcher.py');
+          sys.exit(not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful())"

@@ -78,7 +78,7 @@ npm run build
 .venv/bin/python tools/run-gateway-tests.py --suite spatial
 ```
 
-Windows 的 Python 检查使用 `.\.venv\Scripts\python.exe`。CI 在 Node 22/24 上测试并构建静态前端，在 Ubuntu/Python 3.12 独立虚拟环境中运行空间音频测试。
+Windows 的 Python 检查使用 `.\.venv\Scripts\python.exe`。CI 在 Node 22/24 上测试并构建静态前端，在 Ubuntu/Python 3.12 独立虚拟环境中运行完整空间音频测试；Windows 和 macOS 另外创建各自的私有环境，检查原生依赖安装、启动器和配置边界。这些检查不加载模型权重，不代表相应平台已完成真实音乐渲染与听音验收。
 
 `dist/` 包含静态前端、公共资源与文档，根页面相对跳转至 `./spatial-audio/`。静态预览需从 `dist/` 作为站点根提供服务；完整导入、混音和渲染还需要同源本地后端。静态构建不发布站点，也不配置 GitHub Pages。
 

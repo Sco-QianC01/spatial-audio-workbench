@@ -158,7 +158,7 @@ def main(argv=None):
                     host="127.0.0.1", port=args.port)
         return 0
     except ImportError as exc:
-        parser.error(f"The repository .venv is missing a dependency: {exc}. Install requirements.txt into .venv.")
+        parser.error(f"The repository .venv is missing a dependency: {exc}. Install gateway/requirements-spatial.txt and matching torch/torchaudio into .venv.")
     except (ValueError, OSError) as exc:
         parser.error(str(exc))
 
