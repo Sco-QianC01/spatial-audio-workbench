@@ -28,6 +28,17 @@ test('a short punch-in preserves earlier and later automation with 1ms boundary 
   assert.ok(next.keyframes.every((f,i)=>!i||f.timeSeconds>next.keyframes[i-1].timeSeconds));
 });
 
+test('a first middle-of-track write keeps its final position through the remaining audio',()=>{
+  const object={...source(),...p(25,10)},take=createAutomationTake(object,30,100);
+  take.record(35,p(-90,20));
+  const result=take.finish(40,p(-120,30));
+  for(const at of [0,10,29.99])assert.deepEqual(pointAt(result,at),p(25,10));
+  assert.deepEqual(pointAt(result,35),p(-90,20));
+  for(const at of [40,40.001,60,100])assert.deepEqual(pointAt(result,at),p(-120,30));
+  assert.deepEqual(object,{...source(),...p(25,10)});
+  assert.ok(result.keyframes.every((f,i)=>!i||f.timeSeconds>result.keyframes[i-1].timeSeconds));
+});
+
 test('seam crossing and a whole revolution are not flattened into the wrong rotation',()=>{
   for(const start of [0,170]){
     const object={...source(),...p(start)},take=createAutomationTake(object,0,10);

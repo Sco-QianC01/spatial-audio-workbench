@@ -72,13 +72,13 @@ export function createAutomationTake(object,start,duration){
         if(!result.length||result.at(-1).timeSeconds<guard)result.push(frame(guard,pointAt(original,guard)));
       }
       result.push(...simplify(samples));
-      if(end<duration){
+      if(end<duration&&original.keyframes?.length){
         const guard=Math.min(duration,end+.001);
         result.push(frame(guard,pointAt(original,guard)));
         result.push(...keys.filter(key=>key.timeSeconds>guard).map(key=>({...key})));
       }
       if(result[0].timeSeconds!==0)result.unshift(frame(0,pointAt(original,0)));
-      if(result.at(-1).timeSeconds!==duration)result.push(frame(duration,pointAt(original,duration)));
+      if(result.at(-1).timeSeconds!==duration)result.push(frame(duration,original.keyframes?.length?pointAt(original,duration):samples.at(-1)));
       if(result.length>MAX_KEYFRAMES)throw new RangeError('合并后的轨迹超过上限；本次写入尚未替换原轨迹。');
       return {...original,...position(result[0]),keyframes:result};
     }
