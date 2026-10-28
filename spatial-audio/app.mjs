@@ -2,19 +2,24 @@ import {initMix} from './mix.mjs';
 import {createSceneView} from './scene-view.mjs';
 import {STEREO_GEOMETRY,directionToVector as coords,stereoDirectionToVector as stereoCoords} from './coordinates.mjs';
 import {sampleTrajectory} from './trajectory.mjs';
-import {pointAt,upsertKeyframe,moveKeyframeTime,removeKeyframe,createAutomation,trackLabel,setTrackOrder} from './automation.mjs';
+import {pointAt,upsertKeyframe,moveKeyframeTime,removeKeyframe,createAutomation,trackLabel,setTrackOrder,visibleKeyframes} from './automation.mjs';
 import {initOnlineLink} from './model-link.mjs';
+import {createAutomationTake} from './automation-take.mjs';
+import {createLiveMonitor} from './live-monitor.mjs';
+import {createSceneHistory} from './history.mjs';
 const $=id=>document.getElementById(id);
 const COLORS={drums:'#e39b86',bass:'#9dd0b6',other:'#a9bbd6',vocals:'#d2b3cc'};
 const LAST_PROJECT_KEY='nr-spatial-last-project-v1';
 let project=null,scene=null,selectedId=null,generation=0,revision=0,busy=false,editingEnd=false,runtime=null,pollTimer=null,playhead=0,dragging=null;
 let mixControls;
 let sceneView, automationControls, onlineControls, selectedTime=0, playbackFrame=0, lastFrame=0, playbackId=null;
+let writeTarget=null,writePosition=null,writeTake=null,sceneHistory=null,monitorLoading=false,monitorRequest=0,playbackIntent=0;
+const liveMonitor=createLiveMonitor();
 const trajectoryCache=new WeakMap();
 let drawFrame=0;
 function scheduleDraw(){if(!drawFrame)drawFrame=requestAnimationFrame(()=>{drawFrame=0;draw();});}
-function trajectoryFor(object,duration){
-  const key=JSON.stringify([duration,object.azimuthDeg,object.elevationDeg,object.keyframes]),cached=trajectoryCache.get(object);
+function trajectoryFor(object,duration,editVersion){
+  const key=editVersion??JSON.stringify([duration,object.azimuthDeg,object.elevationDeg,object.keyframes]),cached=trajectoryCache.get(object);
   if(cached?.key===key)return cached.samples;
   const samples=sampleTrajectory(object,duration);trajectoryCache.set(object,{key,samples});return samples;
 }
@@ -46,7 +51,7 @@ function updateControls(){
   $('source-route').disabled=busy;
   $('separate').hidden=$('source-route').value!=='separated-stereo-v1';
   $('separate').disabled=busy||project?.state!=='imported'||runtime?.separation?.ready!==true;
-  $('render').disabled=!editable;$('render-speakers').disabled=!editable;$('speaker-layout').disabled=!editable;
+  $('render').disabled=!editable||Boolean(writeTake);$('render-speakers').disabled=!editable||Boolean(writeTake);$('speaker-layout').disabled=!editable||Boolean(writeTake);
   const layout=speakerLayout(),channels=layout==='7.1.4'?12:8;
   $('speaker-layout').value=layout;
   for(const id of ['session-layout','stage-layout','output-layout'])$(id).textContent=layout;
@@ -62,10 +67,26 @@ function updateControls(){
   const frames=currentObject()?.keyframes??[],index=frames.findIndex(f=>Math.abs(f.timeSeconds-selectedTime)<1e-8);
   $('remove-keyframe').disabled=!editable||index<=0||index>=frames.length-1;
   $('keyframe-time').disabled=!editable||index<=0||index>=frames.length-1;
+  if(writeTake)for(const id of ['width','gain','motion','reset','add-keyframe','remove-keyframe','keyframe-time'])$(id).disabled=true;
   onlineControls?.refresh(busy);
   $('input-badge').textContent=project?'已导入':'未导入';
   $('scene-state').textContent=scene?(revision?'有未渲染修改':'场景就绪'):'等待分轨';
+  updateAutomationState();
   mixControls?.refresh();
+}
+function updateAutomationState(){
+  const editable=Boolean(currentObject())&&!busy&&!monitorLoading;
+  for(const id of ['automation-read','automation-write','automation-save'])$(id).disabled=!editable;
+  $('automation-save').disabled=!editable||!revision||Boolean(writeTake);
+  $('automation-read').setAttribute('aria-pressed',String(writeTarget!==selectedId||!writeTarget));
+  $('automation-write').setAttribute('aria-pressed',String(writeTarget===selectedId&&Boolean(writeTarget)));
+  $('automation-state').dataset.mode=writeTake?'writing':writeTarget?'armed':'read';
+  $('automation-state').textContent=monitorLoading?'空间监听加载中…':writeTake?`${trackLabel(writeTarget)} · Write · ${writeTake.count} 点`:
+    writeTarget?`${trackLabel(writeTarget)} · Write 待播放`:revision?'Read · 有未保存轨迹':'Read · 轨迹已保存';
+  $('scene-undo').disabled=busy||(!writeTake&&!sceneHistory?.canUndo);
+  $('scene-undo').title=writeTake?'撤销本次写入，恢复原轨迹':'撤销场景编辑';
+  $('scene-undo').setAttribute('aria-label',$('scene-undo').title);
+  $('scene-redo').disabled=!sceneHistory?.canRedo||busy||Boolean(writeTake);
 }
 function clearPreview(){
   if($('preview').getAttribute('src')){$('preview').pause();$('preview').removeAttribute('src');$('preview').load();}
@@ -91,6 +112,7 @@ function showAudioWarnings(value){
   node.textContent=warnings.length?`空间渲染听辨提示：${warnings.map(text=>text.replace(/\b(drums|bass|other|vocals)\b/g,trackLabel)).join('；')}。请结合原曲检查轨道定位与折叠听感。`:'';
 }
 function accept(value,{replaceScene=true}={}){
+  const previousId=project?.id;
   project=value;showAudioWarnings(value);
   if(value.nativeStems||value.source?.workflow==='separated-stereo-v1'){$('source-route').value=value.nativeStems?'native-stems-first-v1':'separated-stereo-v1';sourceRouteChanged();}
   if(value.scene){setTrackOrder(value.scene.objects.map(o=>o.id));const palette=['#e39b86','#9dd0b6','#a9bbd6','#d2b3cc','#d1c393','#8dc8ca','#b4c29b','#c3afe0','#e3b18c','#9cbfdf','#c9d4cf','#d1a8ad'];value.scene.objects.forEach((o,i)=>{COLORS[o.id]=palette[i%palette.length];});}
@@ -101,9 +123,11 @@ function accept(value,{replaceScene=true}={}){
     projectOptions();
   }
   if(replaceScene&&value.scene){scene=clone(value.scene);if(!currentObject()?.keyframes?.some(f=>Math.abs(f.timeSeconds-selectedTime)<1e-8))selectedTime=0;if(!scene.objects.some(o=>o.id===selectedId))selectedId=scene.objects[0]?.id;revision=0;}
+  if(scene&&(!sceneHistory||previousId!==value.id))sceneHistory=createSceneHistory(scene);
   $('input-name').textContent=projectName(value);$('input-name').title=value.input?.name??'';
   $('input-meta').textContent=`${time(value.input?.durationSeconds)} · ${value.input?.sampleRate??'—'} Hz · ${value.input?.channels??'—'} ch`;
   if(value.input?.audioUrl&&$('source-audio').getAttribute('src')!==value.input.audioUrl)$('source-audio').src=value.input.audioUrl;
+  if(value.input?.audioUrl&&$('live-audio').getAttribute('src')!==value.input.audioUrl)$('live-audio').src=value.input.audioUrl;
   $('project-id').textContent=`项目 ${value.id}`;
   const previewDuration=$('preview').getAttribute('src')&&Number.isFinite($('preview').duration)?$('preview').duration:value.input?.durationSeconds;
   $('time-total').textContent=time(previewDuration);
@@ -115,6 +139,8 @@ function accept(value,{replaceScene=true}={}){
   if(value.state==='error')throw new Error(value.error??value.progress?.message??'本地处理失败。');
 }
 function begin(){
+  liveMonitor.stop();monitorRequest++;writeTarget=null;writePosition=null;writeTake=null;sceneHistory=null;monitorLoading=false;
+  $('live-audio').pause();$('live-audio').removeAttribute('src');$('live-audio').load();
   showAudioWarnings(null);generation++;clearTimeout(pollTimer);stopPlayhead();playbackId=null;for(const id of ['source-audio','stem-audio','mix-audio'])$(id).pause();clearPreview();
   $('source-audio').removeAttribute('src');$('source-audio').load();
   $('stem-audio').removeAttribute('src');$('stem-audio').hidden=true;
@@ -131,6 +157,7 @@ function projectOptions(){
   select.value=project?.id??'';
 }
 async function saveEdits(){
+  if(writeTake)finishWrite();
   if(!project||!scene||!revision)return;
   setBusy(true);
   try{
@@ -220,7 +247,7 @@ function renderStems(){
     rows.forEach((row,i)=>{
       const object=scene.objects[i];row.classList.toggle('selected',object.id===selectedId);
       row.querySelector('small').textContent=`${object.azimuthDeg}° / ${object.elevationDeg}°${object.keyframes?.length?' · 轨迹':''}`;
-      const buttons=row.querySelectorAll('button');buttons[0].disabled=busy;buttons[1].disabled=busy||!object.audioUrl;buttons[2].disabled=busy;buttons[2].setAttribute('aria-pressed',String(Boolean(object.muted)));
+      const buttons=row.querySelectorAll('button');buttons[0].disabled=busy;buttons[1].disabled=busy||!object.audioUrl||Boolean(writeTake);buttons[2].disabled=busy||Boolean(writeTake);buttons[2].setAttribute('aria-pressed',String(Boolean(object.muted)));
     });return;
   }
   $('stems').replaceChildren();$('stem-count').textContent=`${scene?.objects.length??0} 轨`;
@@ -240,7 +267,12 @@ function renderStems(){
   }
 }
 function point(object,t=playhead){return pointAt(object,t);}
-function editPoint(){const object=currentObject();return object?.keyframes?.find(f=>Math.abs(f.timeSeconds-selectedTime)<1e-8)??object;}
+function editPoint(){
+  const object=currentObject();
+  if(writeTarget===object?.id&&writePosition)return writePosition;
+  if(playbackId==='live-audio'&&!$('live-audio').paused&&object)return pointAt(object,playhead);
+  return object?.keyframes?.find(f=>Math.abs(f.timeSeconds-selectedTime)<1e-8)??object;
+}
 function renderParameters(){
   const object=currentObject(),p=editPoint();
   $('selected-label').textContent=object?trackLabel(object.id):'未选择轨道';
@@ -255,13 +287,80 @@ function renderParameters(){
   $('edit-start').classList.toggle('active',selectedTime===0);$('edit-end').classList.toggle('active',Boolean(keys.length)&&Math.abs(selectedTime-scene.durationSeconds)<1e-8);updateControls();
 }
 function changed(){
-  const cursor=playhead;revision++;clearPreview();playhead=cursor;$('seek').value=cursor;$('time-current').textContent=time(cursor);renderStems();renderParameters();scheduleDraw();message('轨迹已修改，渲染后试听与导出。');
+  sceneHistory?.checkpoint(scene,{mergeKey:dragging??(document.activeElement?.type==='range'?document.activeElement.id:null)});
+  const cursor=playhead;revision++;clearPreview();playhead=cursor;$('seek').value=cursor;$('time-current').textContent=time(cursor);renderStems();renderParameters();scheduleDraw();message('轨迹已修改，可用空间监听重放；保存后用于渲染与导出。');
 }
 function setPosition(azimuth,elevation){
   const object=currentObject();if(!object||busy)return;
+  if(playbackId==='live-audio'&&!$('live-audio').paused&&!writeTarget)return;
+  if(writeTarget===object.id){
+    writePosition={azimuthDeg:Math.round(wrap(azimuth)),elevationDeg:Math.round(Math.max(-90,Math.min(90,elevation)))};
+    if(liveMonitor.active)liveMonitor.update(scene,$('live-audio').currentTime,{[object.id]:writePosition});
+    renderParameters();scheduleDraw();return;
+  }
   const p=editPoint();p.azimuthDeg=Math.round(wrap(azimuth));p.elevationDeg=Math.round(Math.max(-90,Math.min(90,elevation)));
   if(object.keyframes?.length&&selectedTime===0){Object.assign(object,{azimuthDeg:p.azimuthDeg,elevationDeg:p.elevationDeg});Object.assign(object.keyframes[0],{azimuthDeg:p.azimuthDeg,elevationDeg:p.elevationDeg});}
   changed();
+}
+function startWrite(){
+  if(!writeTarget||writeTake||!scene)return;
+  const object=scene.objects.find(o=>o.id===writeTarget),at=$('live-audio').currentTime;
+  if(!object||at>=scene.durationSeconds)return;
+  writeTake=createAutomationTake(object,at,scene.durationSeconds);
+  writeTake.record(at,writePosition??pointAt(object,at));updateControls();renderStems();
+}
+function finishWrite(){
+  if(!writeTake)return false;
+  const object=scene.objects.find(o=>o.id===writeTarget),take=writeTake;
+  const end=Math.max(take.lastTime,Math.min(scene.durationSeconds,$('live-audio').currentTime));
+  const next=take.finish(end,writePosition);
+  writeTake=null;writeTarget=null;writePosition=null;
+  scene.objects[scene.objects.indexOf(object)]=next;
+  changed();return true;
+}
+function sampleWrite(at){
+  if(!writeTake||at<writeTake.lastTime||at-writeTake.lastTime<.05-1e-6)return;
+    try{writeTake.record(Math.min(at,scene.durationSeconds),writePosition);updateAutomationState();}
+  catch(error){$('live-audio').pause();message(`写入已停止，原轨迹与已记录内容保留：${error.message}`,true);}
+}
+async function prepareMonitor(){
+  if(!scene)throw new Error('请先导入并完成分轨。');
+  monitorLoading=true;const request=++monitorRequest,token=generation;updateControls();
+  try{
+    const prepared=await liveMonitor.prepare(clone(scene));
+    if(!prepared||request!==monitorRequest||token!==generation)throw new Error('空间监听加载已取消。');
+  }finally{if(request===monitorRequest){monitorLoading=false;updateControls();}}
+}
+async function automationMode(mode){
+  if(!scene||busy||monitorLoading)return;
+  try{
+    const completed=finishWrite();
+    if(mode==='write'){writeTarget=selectedId;writePosition=pointAt(currentObject(),Math.min(playhead,scene.durationSeconds));}
+    else{writeTarget=null;writePosition=null;}
+    updateAutomationState();
+    if(completed)await saveEdits();
+    await selectPlayback('live-audio');
+    if(mode==='write'&&!$('live-audio').paused)startWrite();
+    if(mode==='write'){document.querySelector('.projection-panel').open=true;draw();}
+    message(mode==='write'?'Write 已就绪：播放后拖动声源或位置推子；暂停即完成并切回 Read。':'Read：播放时按已保存的坐标轨迹进行空间监听。');
+  }catch(error){if(!writeTake){writeTarget=null;writePosition=null;}updateAutomationState();message(error.message,true);}
+}
+async function saveAutomation(){
+  if(writeTake)$('live-audio').pause();
+  try{await saveEdits();message('轨迹已保存到本机项目，重新载入后仍可 Read 重放。');}
+  catch(error){message(error.message,true);}
+}
+function undoScene(redo=false){
+  if(busy||!sceneHistory)return;
+  if(writeTake){
+    if(redo)return;
+    writeTake=null;writeTarget=null;writePosition=null;$('live-audio').pause();
+    renderStems();renderParameters();draw();message('已撤销本次写入，原轨迹保持。');return;
+  }
+  const value=redo?sceneHistory.redo():sceneHistory.undo();if(!value)return;
+  scene=value;writeTarget=null;writePosition=null;revision++;
+  const cursor=playhead;clearPreview();playhead=cursor;
+  renderStems();renderParameters();draw();message(redo?'已重做轨迹修改。':'已撤销轨迹修改，可重做恢复。');
 }
 async function renderBinaural(snapshot,token){
   const duration=snapshot.durationSeconds,tail=snapshot.renderTailSeconds??0;
@@ -327,6 +426,8 @@ async function finishBinaural(value,token){
 }
 async function render({speakersOnly=false}={}){
   if(!scene||busy)return;
+  if(writeTake){$('live-audio').pause();finishWrite();}
+  $('live-audio').pause();liveMonitor.stop();
   const token=++generation,submittedRevision=revision;setBusy(true);clearPreview();$('stem-audio').pause();$('source-audio').pause();
   try{
     message('正在保存并校验当前声场…');
@@ -349,18 +450,18 @@ function canvasContext(id){
 function draw(){
   if(sceneView){
     const objects=(scene?.objects??[]).map(object=>{
-      const p=point(object);
+      const p=writeTarget===object.id&&writePosition?writePosition:point(object);
       return {id:object.id,label:trackLabel(object.id),color:COLORS[object.id],muted:object.muted,
         position:coords(p.azimuthDeg,p.elevationDeg),
-        trajectory:trajectoryFor(object,scene.durationSeconds),
-        keyframes:(object.keyframes??[]).map(frame=>({timeSeconds:frame.timeSeconds,position:coords(frame.azimuthDeg,frame.elevationDeg)})),
+        trajectory:writeTake&&writeTarget===object.id?writeTake.previewFrames.map(frame=>({timeSeconds:frame.timeSeconds,position:coords(frame.azimuthDeg,frame.elevationDeg)})):trajectoryFor(object,scene.durationSeconds,revision),
+        keyframes:visibleKeyframes(object,selectedTime).map(({frame})=>({timeSeconds:frame.timeSeconds,position:coords(frame.azimuthDeg,frame.elevationDeg)})),
         spread:Array.from({length:25},(_,i)=>stereoCoords(p.azimuthDeg,p.elevationDeg,(i/24-.5)*object.widthDeg))};
     });
     sceneView.update({speakerLayout:speakerLayout(),objects,selectedId,selectedTime,time:playhead,editable:!busy});
-    const object=currentObject(),p=object?point(object):null;
+    const object=currentObject(),p=object?(writeTarget===object.id&&writePosition?writePosition:point(object)):null;
     $('scene-coordinate').textContent=p?`方位 ${Math.round(p.azimuthDeg)}°  /  仰角 ${Math.round(p.elevationDeg)}°`:'未选择对象';
   }
-  automationControls?.update({scene,selectedId,selectedTime,time:playhead,disabled:busy});
+  automationControls?.update({scene,selectedId,selectedTime,time:playhead,disabled:busy||Boolean(writeTake),revision});
   const colors=COLORS;
   for(const row of document.querySelectorAll('.automation-track'))row.style.setProperty('--track-color',colors[row.querySelector('.automation-track-name')?.dataset.objectId]??'#b8d4cc');
   if(!document.querySelector('.projection-panel').open)return;
@@ -376,7 +477,7 @@ function draw(){
       ctx.beginPath();ctx.moveTo(cx,25);ctx.lineTo(cx,h-25);ctx.moveTo(15,cy);ctx.lineTo(w-15,cy);ctx.stroke();ctx.fillText('+90°',cx,14);ctx.fillText('−90°',cx,h-13);ctx.fillText('0°',cx+19,cy+13);
     }
     for(const object of scene?.objects??[]){
-      const isSelected=object.id===selectedId,p=point(object),color=COLORS[object.id]??'#c5d8d3';
+      const isSelected=object.id===selectedId,p=writeTarget===object.id&&writePosition?writePosition:point(object),color=COLORS[object.id]??'#c5d8d3';
       const location=p=>top?{x:cx-Math.sin(p.azimuthDeg*Math.PI/180)*r,y:cy-Math.cos(p.azimuthDeg*Math.PI/180)*r}:{x:cx,y:cy-p.elevationDeg/90*(h/2-35)};
       if(top&&object.keyframes?.length){
         ctx.strokeStyle=color;ctx.globalAlpha=.35;ctx.setLineDash([3,4]);ctx.beginPath();
@@ -398,7 +499,10 @@ function pointer(event,id){
     if(id==='top-canvas'){
       let closest=null,distance=24;
       for(const object of scene.objects){const p=point(object),r=Math.min(rect.width,rect.height)*.36,px=rect.width/2-Math.sin(p.azimuthDeg*Math.PI/180)*r,py=rect.height/2-Math.cos(p.azimuthDeg*Math.PI/180)*r,d=Math.hypot(x-px,y-py);if(d<distance){closest=object;distance=d;}}
-      if(closest)selectKeyframe(closest.id,selectedTime);
+      if(closest){
+        if(writeTake&&closest.id!==writeTarget){$('live-audio').pause();return;}
+        selectKeyframe(closest.id,selectedTime,false);
+      }
     }
     dragging=id;canvas.setPointerCapture(event.pointerId);
   }
@@ -409,14 +513,18 @@ function pointer(event,id){
 }
 function selectKeyframe(id,at,movePlayhead=true){
   const object=scene?.objects.find(o=>o.id===id);if(busy||!object)return;
+  if(writeTake&&id!==writeTarget){$('live-audio').pause();return;}
+  if(writeTarget&&id!==writeTarget){writeTarget=null;writePosition=null;}
   selectedId=id;selectedTime=object.keyframes?.length?object.keyframes.reduce((nearest,frame)=>Math.abs(frame.timeSeconds-at)<Math.abs(nearest-at)?frame.timeSeconds:nearest,object.keyframes[0].timeSeconds):0;editingEnd=Math.abs(selectedTime-scene.durationSeconds)<1e-8;
   if(movePlayhead)seekTo(selectedTime);renderStems();renderParameters();draw();
 }
 function seekTo(at){
   if(busy||!Number.isFinite(at))return;
+  if(writeTake){$('live-audio').pause();message('本次写入已结束；可重新定位后再次 Write。');return;}
   const audio=transportAudio(),duration=Number.isFinite(audio?.duration)?audio.duration:scene?.durationSeconds;
   if(!Number.isFinite(duration))return;
   playhead=Math.max(0,Math.min(duration,at));
+  if(audio?.id==='live-audio'&&liveMonitor.active)liveMonitor.stop();
   if(audio)audio.currentTime=playhead;
   $('seek').value=playhead;$('time-current').textContent=time(playhead);draw();
 }
@@ -450,6 +558,19 @@ function sourceRouteChanged(){
   updateControls();
 }
 $('source-route').addEventListener('change',sourceRouteChanged);
+$('automation-read').addEventListener('click',()=>automationMode('read'));
+$('automation-write').addEventListener('click',()=>automationMode('write'));
+$('automation-save').addEventListener('click',saveAutomation);
+$('scene-undo').addEventListener('click',()=>undoScene());
+$('scene-redo').addEventListener('click',()=>undoScene(true));
+document.addEventListener('keydown',event=>{
+  if(!(event.ctrlKey||event.metaKey)||event.key.toLowerCase()!=='z'||/INPUT|TEXTAREA|SELECT/.test(event.target.tagName))return;
+  event.preventDefault();undoScene(event.shiftKey);
+});
+window.addEventListener('beforeunload',event=>{
+  if(!revision&&!writeTake)return;
+  event.preventDefault();event.returnValue='';
+});
 
 $('file').addEventListener('change',event=>{const file=event.target.files[0];if(file)loadInput(file);event.target.value='';});
 $('demo').addEventListener('click',()=>loadInput());$('separate').addEventListener('click',separate);$('render').addEventListener('click',()=>render());
@@ -473,11 +594,16 @@ function transportAudio(){
   return ['preview','source-audio'].map($).find(audio=>audio.getAttribute('src'))??null;
 }
 async function selectPlayback(id){
-  if(busy||!['preview','source-audio','stem-audio'].includes(id)||!$(id).getAttribute('src'))return;
+  if(busy||!['preview','source-audio','stem-audio','live-audio'].includes(id)||!$(id).getAttribute('src'))return;
+  const intent=++playbackIntent;
+  if(id==='live-audio')await prepareMonitor();
+  else{monitorRequest++;monitorLoading=false;liveMonitor.stop();}
+  if(intent!==playbackIntent)return;
+  if(id!=='live-audio'&&writeTake)$('live-audio').pause();
   mixControls?.cancelPendingPlayback();
-  const playing=['preview','source-audio','stem-audio'].some(source=>!$(source).paused);
+  const playing=['preview','source-audio','stem-audio','live-audio'].some(source=>$(source)&&!$(source).paused);
   stopPlayhead();playbackId=id;
-  for(const other of ['preview','source-audio','stem-audio','mix-audio'])$(other).pause();
+  for(const other of ['preview','source-audio','stem-audio','mix-audio','live-audio'])$(other)?.pause();
   seekTo(playhead);updateTransport();
   if(playing){
     const audio=$(id);
@@ -485,36 +611,69 @@ async function selectPlayback(id){
   }
 }
 function updateTransport(){
-  const audio=transportAudio(),label=audio?.id==='preview'?'HRTF · 双耳试听':audio?.id==='stem-audio'?`声部参考 · ${audio.dataset.referenceLabel??'分轨'}（非空间渲染）`:'原曲参考（非空间渲染）';
-  const select=$('playback-source');select.disabled=!audio||busy;
+  const audio=transportAudio(),label=audio?.id==='live-audio'?'实时空间监听 · 通用 HRTF':audio?.id==='preview'?'HRTF · 双耳试听':audio?.id==='stem-audio'?`声部参考 · ${audio.dataset.referenceLabel??'分轨'}（非空间渲染）`:'原曲参考（非空间渲染）';
+  const select=$('playback-source');select.disabled=!audio||busy||monitorLoading;
   for(const option of select.options){option.disabled=!$(option.value).getAttribute('src');if(option.value==='stem-audio')option.textContent=`${$('stem-audio').dataset.referenceLabel??'分轨'}参考`;}
   select.value=audio?.id??'source-audio';
   $('preview-label').textContent=audio?label:'等待音频';
   $('seek').disabled=!audio||busy;
-  $('play-pause').disabled=!audio||busy;$('play-pause').textContent=!audio||audio.paused?'▶':'Ⅱ';
+  $('play-pause').disabled=!audio||busy||monitorLoading;$('play-pause').textContent=!audio||audio.paused?'▶':'Ⅱ';
+  for(const id of ['azimuth','elevation'])$(id).disabled=!scene||busy||(audio?.id==='live-audio'&&!audio.paused&&!writeTarget);
   $('play-pause').setAttribute('aria-label',`${!audio||audio.paused?'播放':'暂停'}${audio?label:'音频'}`);
   if(audio){const duration=Number.isFinite(audio.duration)?audio.duration:scene?.durationSeconds??project?.input?.durationSeconds??1;$('seek').max=duration;$('time-total').textContent=time(duration);}
 }
 function syncPlayhead(audio){
   if(audio!==transportAudio()||!audio.getAttribute('src'))return;
-  playhead=audio.currentTime;$('seek').value=playhead;$('time-current').textContent=time(playhead);draw();
+  playhead=audio.currentTime;
+  if(audio.id==='live-audio'&&!audio.paused){
+    sampleWrite(playhead);
+    liveMonitor.update(scene,playhead,writeTarget&&writePosition?{[writeTarget]:writePosition}:{});
+    const p=currentObject()?pointAt(currentObject(),playhead):null;
+    if(p&&!writeTarget)for(const [id,key] of [['azimuth','azimuthDeg'],['elevation','elevationDeg']]){$(id).value=p[key];$(`${id}-value`).textContent=`${Number(p[key].toFixed(1))}°`;}
+  }
+  $('seek').value=playhead;$('time-current').textContent=time(playhead);draw();
 }
 $('seek').addEventListener('input',()=>seekTo(Number($('seek').value)));
 $('playback-source').addEventListener('change',async event=>{try{await selectPlayback(event.target.value);}catch(error){updateTransport();message(`试听失败：${error.message}`,true);}});
-$('play-pause').addEventListener('click',async()=>{const audio=transportAudio();if(!audio)return;try{if(audio.paused){mixControls?.cancelPendingPlayback();audio.currentTime=Math.min(playhead,Number.isFinite(audio.duration)?audio.duration:playhead);await audio.play();}else audio.pause();}catch(error){if(error.name!=='AbortError'||(!audio.paused&&audio===transportAudio()))message(`试听失败：${error.message}`,true);}});
-for(const id of ['preview','source-audio','stem-audio','mix-audio']){
+$('play-pause').addEventListener('click',async()=>{const audio=transportAudio();if(!audio)return;const intent=++playbackIntent;try{if(audio.paused){if(audio.id==='live-audio')await prepareMonitor();if(intent!==playbackIntent||audio!==transportAudio())return;mixControls?.cancelPendingPlayback();audio.currentTime=Math.min(playhead,Number.isFinite(audio.duration)?audio.duration:playhead);await audio.play();}else audio.pause();}catch(error){if(error.name!=='AbortError'||(!audio.paused&&audio===transportAudio()))message(`试听失败：${error.message}`,true);}});
+for(const id of ['preview','source-audio','stem-audio','mix-audio','live-audio']){
   const audio=$(id);
   audio.addEventListener('play',()=>{
     if(audio.paused)return;
+    if(id!=='live-audio'){playbackIntent++;monitorRequest++;monitorLoading=false;}
     if(id!=='mix-audio')mixControls?.cancelPendingPlayback();
     stopPlayhead();if(id!=='mix-audio')playbackId=id;
-    for(const other of ['preview','source-audio','stem-audio','mix-audio'])if(other!==id)$(other).pause();
+    for(const other of ['preview','source-audio','stem-audio','mix-audio','live-audio'])if(other!==id)$(other).pause();
+    if(id==='live-audio'){
+      try{liveMonitor.start(scene,audio.currentTime,{rate:audio.playbackRate});startWrite();}
+      catch(error){audio.pause();message(`空间监听启动失败：${error.message}`,true);return;}
+    }else liveMonitor.stop();
     if(id!=='mix-audio'){syncPlayhead(audio);startPlayhead();}updateTransport();
   });
   if(id==='mix-audio')continue;
   audio.addEventListener('timeupdate',()=>{if(!playbackFrame)syncPlayhead(audio);});
   audio.addEventListener('loadedmetadata',()=>{if(audio===transportAudio())updateTransport();});
+  if(id==='live-audio')for(const event of ['seeked','ratechange'])audio.addEventListener(event,()=>{
+    if(audio.paused||!liveMonitor.ready)return;
+    try{liveMonitor.start(scene,audio.currentTime,{rate:audio.playbackRate});}
+    catch(error){audio.pause();message(error.message,true);}
+  });
+  if(id==='live-audio'){
+    audio.addEventListener('waiting',()=>liveMonitor.stop());
+    audio.addEventListener('playing',()=>{
+      if(audio.paused||!liveMonitor.ready)return;
+      try{liveMonitor.start(scene,audio.currentTime,{rate:audio.playbackRate});}
+      catch(error){audio.pause();message(error.message,true);}
+    });
+  }
   for(const event of ['pause','ended','emptied'])audio.addEventListener(event,()=>{
+    if(id==='live-audio'){
+      liveMonitor.stop();
+      if(writeTake){
+        try{if(finishWrite())saveAutomation();}
+        catch(error){message(`轨迹尚未保存：${error.message}`,true);}
+      }else if(writeTarget&&event==='ended'){writeTarget=null;writePosition=null;updateAutomationState();}
+    }
     if(audio!==transportAudio())return;stopPlayhead();if(event!=='emptied')syncPlayhead(audio);updateTransport();
   });
 }
@@ -525,9 +684,13 @@ function trackPlayhead(stamp){
   playbackFrame=requestAnimationFrame(trackPlayhead);
 }
 function startPlayhead(){const audio=transportAudio();if(!playbackFrame&&!document.hidden&&audio&&!audio.paused)playbackFrame=requestAnimationFrame(trackPlayhead);}
-document.addEventListener('visibilitychange',()=>document.hidden?stopPlayhead():startPlayhead());
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){if(playbackId==='live-audio')$('live-audio').pause();stopPlayhead();}
+  else startPlayhead();
+});
 sceneView=createSceneView({canvas:$('scene-canvas'),labels:$('scene-labels'),
   onSelect:id=>selectKeyframe(id,playhead,false),onKeyframeSelect:selectKeyframe,onSeek:seekTo,
+  onMove:(azimuth,elevation)=>setPosition(azimuth,elevation),
   onOrbit:()=>{for(const button of document.querySelectorAll('button[data-view]'))button.setAttribute('aria-pressed','false');}});
 function updateViewAvailability(){
   $('scene-canvas').dataset.webglState=sceneView.available?'ready':'unavailable';
@@ -540,7 +703,7 @@ document.querySelector('.projection-panel').addEventListener('toggle',draw);
 for(const button of document.querySelectorAll('button[data-view]')){
   button.addEventListener('click',()=>{sceneView.setView(button.dataset.view);for(const other of document.querySelectorAll('button[data-view]'))other.setAttribute('aria-pressed',String(other===button));});
 }
-window.addEventListener('pagehide',event=>{stopPlayhead();cancelAnimationFrame(drawFrame);drawFrame=0;if(!event.persisted){sceneView?.dispose();automationControls?.dispose();onlineControls?.dispose();}});
+window.addEventListener('pagehide',event=>{stopPlayhead();liveMonitor.stop();cancelAnimationFrame(drawFrame);drawFrame=0;if(!event.persisted){liveMonitor.dispose();sceneView?.dispose();automationControls?.dispose();onlineControls?.dispose();}});
 new ResizeObserver(draw).observe($('top-canvas'));new ResizeObserver(draw).observe($('side-canvas'));
 async function init(){
   try{

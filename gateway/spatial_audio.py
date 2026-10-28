@@ -92,8 +92,8 @@ def validate_scene(value, project):
             raise ValueError("静音状态无效。")
         obj["muted"] = source["muted"]
         keys = source.get("keyframes", [])
-        if not isinstance(keys, list) or len(keys) > 32 or len(keys) == 1:
-            raise ValueError("轨迹为空或包含2至32个关键帧。")
+        if not isinstance(keys, list) or len(keys) > 12002 or len(keys) == 1:
+            raise ValueError("轨迹为空或包含2至12002个关键帧。")
         for frame in keys:
             if not isinstance(frame, dict):
                 raise ValueError("关键帧无效。")
@@ -170,8 +170,9 @@ def render_foa(scene, stems_dir, output_dir):
     for obj in scene["objects"]:
         audio, rate = sf.read(Path(stems_dir) / f"{obj['id']}.wav",
                               dtype="float32", always_2d=True)
-        if rate != 44100 or audio.shape[1] != 2 or not np.isfinite(audio).all():
-            raise ValueError("声部音频格式无效。")
+        if rate != 44100 or audio.shape[1] != 2 or not np.isfinite(audio).all() \
+                or abs(len(audio) - round(scene["durationSeconds"]*rate)) > 1:
+            raise ValueError("声部音频格式或完整时间线无效。")
         stereo = audio.astype(np.float64)
         mid = (stereo[:, 0] + stereo[:, 1]) / math.sqrt(2)
         side = (stereo[:, 0] - stereo[:, 1]) / math.sqrt(2)

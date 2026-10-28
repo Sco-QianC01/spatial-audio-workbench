@@ -9,8 +9,9 @@ export function pointAt(object,time){
   finite(time,'时间');
   const frames=object.keyframes??[];
   if(frames.length<2)return {azimuthDeg:object.azimuthDeg,elevationDeg:object.elevationDeg};
-  let a=frames[0],b=frames.at(-1);
-  for(let i=1;i<frames.length;i++)if(time<=frames[i].timeSeconds){a=frames[i-1];b=frames[i];break;}
+  let low=0,high=frames.length-1;
+  while(high-low>1){const middle=(low+high)>>1;if(frames[middle].timeSeconds<time)low=middle;else high=middle;}
+  const a=frames[low],b=frames[high];
   const f=Math.max(0,Math.min(1,(time-a.timeSeconds)/(b.timeSeconds-a.timeSeconds||1)));
   return {azimuthDeg:wrap(a.azimuthDeg+wrap(b.azimuthDeg-a.azimuthDeg)*f),elevationDeg:a.elevationDeg+(b.elevationDeg-a.elevationDeg)*f};
 }
@@ -36,7 +37,7 @@ export function upsertKeyframe(object,time,duration){
   const index=frames.findIndex(frame=>Math.abs(frame.timeSeconds-at)<1e-10);
   if(index>=0)frames[index]={...frames[index],...position};
   else{
-    if(frames.length>=32)throw new RangeError('最多32个关键帧。');
+    if(frames.length>=12002)throw new RangeError('最多12002个关键帧。');
     frames.push({timeSeconds:at,...position});frames.sort((a,b)=>a.timeSeconds-b.timeSeconds);
   }
   separated(frames);
@@ -57,6 +58,15 @@ export function removeKeyframe(object,index){
   if(index===0||index===frames.length-1)throw new RangeError('保留首尾关键帧；只能删除中间节点。');
   frames.splice(index,1);
   return {...object,keyframes:frames};
+}
+
+export function visibleKeyframes(object,selectedTime,limit=96){
+  const frames=object.keyframes??[],indices=new Set();
+  if(frames.length<=limit)return frames.map((frame,index)=>({frame,index}));
+  for(let i=0;i<limit;i++)indices.add(Math.round(i*(frames.length-1)/(limit-1)));
+  const selected=frames.findIndex(frame=>Math.abs(frame.timeSeconds-selectedTime)<1e-8);
+  if(selected>=0)indices.add(selected);
+  return [...indices].sort((a,b)=>a-b).map(index=>({frame:frames[index],index}));
 }
 
 const clock=time=>{const ticks=Math.round(time*10);return `${Math.floor(ticks/600)}:${((ticks%600)/10).toFixed(1).padStart(4,'0')}`;};
@@ -105,7 +115,7 @@ export function createAutomation({container,onSelect=()=>{},onSeek=()=>{},getSta
     let target=event.target;
     while(target&&target!==container){
       if(target.dataset?.objectId){
-        const object=state.scene.objects.find(item=>item.id===target.dataset.objectId);
+        const object=(state.scene?.objects??[]).find(item=>item.id===target.dataset.objectId);
         if(!object)return;
         const latest=getState?.()??state;
         const at=target.dataset.frameIndex===undefined?Math.max(0,Math.min(state.scene.durationSeconds,latest.time??0)):object.keyframes[Number(target.dataset.frameIndex)]?.timeSeconds;
@@ -128,22 +138,25 @@ export function createAutomation({container,onSelect=()=>{},onSeek=()=>{},getSta
     update(next){
       if(disposed)return;
       state=next;
-      const scene=next.scene,objects=scene?.objects??[],duration=scene?.durationSeconds??0;
+      const scene=next.scene,objects=(scene?.objects??[]),duration=scene?.durationSeconds??0;
       const empty=container.querySelector?.('.automation-empty');if(empty)empty.hidden=objects.length>0;
       const ids=new Set(objects.map(object=>object.id));
       for(const [id,row] of rows)if(!ids.has(id)){row.row.remove();rows.delete(id);}
       for(const object of objects){
         let row=rows.get(object.id);if(!row){row=makeRow(object);rows.set(object.id,row);}
         row.name.textContent=trackLabel(object.id);row.name.disabled=Boolean(next.disabled);
+        row.row.style.opacity=object.muted?'.45':'1';
         row.name.setAttribute('aria-pressed',String(next.selectedId===object.id));
         row.lane.setAttribute('aria-label',`${trackLabel(object.id)}：实线方位角，虚线仰角；点击跳转时间`);
-        const signature=JSON.stringify([duration,object.label,object.azimuthDeg,object.elevationDeg,object.keyframes]);
-        if(signature!==row.signature){
+        const signature=next.revision===undefined?JSON.stringify([duration,object.label,object.azimuthDeg,object.elevationDeg,object.keyframes]):`${duration}:${next.revision}:${next.selectedTime}`;
+        if(signature!==row.signature||row.objectRef!==object){
           row.signature=signature;
+          row.objectRef=object;
           const [az,el]=duration>0?paths(object,duration):['',''];row.az.setAttribute('d',az);row.el.setAttribute('d',el);
-          while(row.nodes.length>(object.keyframes?.length??0))row.nodes.pop().remove();
-          (object.keyframes??[]).forEach((frame,index)=>{
-            let node=row.nodes[index];
+          const visible=visibleKeyframes(object,next.selectedTime);
+          while(row.nodes.length>visible.length)row.nodes.pop().remove();
+          visible.forEach(({frame,index},slot)=>{
+            let node=row.nodes[slot];
             if(!node){node=element('button','automation-node');node.type='button';node.dataset.objectId=object.id;row.lane.append(node);row.nodes.push(node);}
             node.dataset.frameIndex=String(index);
             node.style.position='absolute';node.style.left=`${frame.timeSeconds/duration*100}%`;node.style.top=`${y(wrap(frame.azimuthDeg),180)}%`;
@@ -151,8 +164,8 @@ export function createAutomation({container,onSelect=()=>{},onSeek=()=>{},getSta
             node.title=node.getAttribute('aria-label');
           });
         }
-        row.nodes.forEach((node,index)=>{
-          const active=next.selectedId===object.id&&Math.abs((object.keyframes[index].timeSeconds)-(next.selectedTime??-1))<1e-9;
+        row.nodes.forEach(node=>{
+          const active=next.selectedId===object.id&&Math.abs((object.keyframes[Number(node.dataset.frameIndex)].timeSeconds)-(next.selectedTime??-1))<1e-9;
           node.disabled=Boolean(next.disabled);node.classList.toggle('is-selected',active);node.setAttribute('aria-pressed',String(active));
         });
         const time=Math.max(0,Math.min(duration,next.time??0));

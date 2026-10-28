@@ -30,10 +30,10 @@ function setup(){
   const mix=initMix({getState:()=>state,run(){},render(){},message:text=>errors.push(text)});
   mix.refresh();
   const audio=$('mix-audio');
-  const start=source.indexOf("\nfor(const id of ['preview','source-audio','stem-audio','mix-audio']){");
+  const start=source.indexOf("\nfor(const id of ['preview','source-audio','stem-audio','mix-audio','live-audio']){");
   const end=source.indexOf('\nfunction stopPlayhead()',start);
   const selectPlayback=new Function('mixControls','$',`
-    let busy=false,playbackId='source-audio',playhead=8,playbackFrame=0,scene={durationSeconds:30};
+    let busy=false,playbackId='source-audio',playhead=8,playbackFrame=0,scene={durationSeconds:30},writeTake=null;let playbackIntent=0,monitorRequest=0,monitorLoading=false;const liveMonitor={stop(){}};
     const stopPlayhead=()=>{},startPlayhead=()=>{},syncPlayhead=()=>{},updateTransport=()=>{},draw=()=>{},time=String;
     ${extract('transportAudio')}
     ${extract('seekTo')}

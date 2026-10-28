@@ -38,7 +38,7 @@ function trajectoryLine(points,color,opacity){
 }
 const clock=seconds=>{const ms=Math.round(seconds*1000);return `${Math.floor(ms/60000)}:${((ms%60000)/1000).toFixed(3).padStart(6,'0')}`;};
 
-export function createSceneView({canvas,labels,onSelect=()=>{},onKeyframeSelect=()=>{},onSeek=()=>{},onOrbit=()=>{}}){
+export function createSceneView({canvas,labels,onSelect=()=>{},onKeyframeSelect=()=>{},onSeek=()=>{},onOrbit=()=>{},onMove=()=>{}}){
   let renderer;
   try{renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});}
   catch{
@@ -201,6 +201,7 @@ export function createSceneView({canvas,labels,onSelect=()=>{},onKeyframeSelect=
       for(const node of record.nodes){const active=Math.abs(node.timeSeconds-selectedTime)<1e-8;node.mesh.material.color.set(active?0xffffff:color);node.mesh.material.opacity=object.muted?.3:active?1:.8;node.mesh.scale.setScalar(active?1.4:1);}
       if(record.path){record.path.material.opacity=object.muted?.12:selected?.7:.2;record.path.material.linewidth=selected?2.2:1.1;record.path.material.dashed=!selected;}
       if(record.spread)record.spread.material.opacity=object.muted?.12:selected?.72:.3;
+      for(const name of ['path','spread'])if(record[name])record[name].material.color.set(color);
     }
     canvas.dataset.objectCount=String(records.size);canvas.dataset.selectedObject=selectedId??'';canvas.dataset.keyframeCount=String(records.get(selectedId)?.nodes.length??0);canvas.dataset.selectedTime=String(selectedTime);render();
   }
@@ -228,8 +229,22 @@ export function createSceneView({canvas,labels,onSelect=()=>{},onKeyframeSelect=
     const hit=pickTrajectory(record.trajectory.map(sample=>({...sample,...screen(sample.position)})),p,{maxDistancePx:limit,referenceTime:currentTime,accept:hit=>visibleAt(positionAt(hit))});
     return hit?{...hit,kind:'trajectory',id:record.id,p}:null;
   }
-  const down=event=>{press={x:event.clientX,y:event.clientY,id:event.pointerId};};
+  let objectDrag=null;
+  const down=event=>{
+    press={x:event.clientX,y:event.clientY,id:event.pointerId};
+    if(!editable||lost||event.button!==0)return;
+    const target=locate(event),record=records.get(selectedId);
+    if(!record||target?.id!==selectedId||target.kind==='trajectory')return;
+    const normal=new THREE.Vector3();camera.getWorldDirection(normal);
+    objectDrag={plane:new THREE.Plane().setFromNormalAndCoplanarPoint(normal,new THREE.Vector3(...record.position)),moved:false};
+    controls.enabled=false;canvas.setPointerCapture(event.pointerId);event.preventDefault();event.stopImmediatePropagation();
+  };
   const up=event=>{
+    if(objectDrag){
+      const moved=objectDrag.moved;objectDrag=null;controls.enabled=true;
+      if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);
+      if(moved){press=null;return;}
+    }
     const start=press;press=null;hint.hidden=true;if(!editable||lost||!start||start.id!==event.pointerId||Math.hypot(event.clientX-start.x,event.clientY-start.y)>5)return;
     const target=locate(event);
     if(target?.kind==='keyframe')onKeyframeSelect(target.id,target.timeSeconds);
@@ -237,23 +252,33 @@ export function createSceneView({canvas,labels,onSelect=()=>{},onKeyframeSelect=
     else if(target)onSeek(target.timeSeconds);
   };
   const hover=event=>{
+    if(objectDrag&&press){
+      if(Math.hypot(event.clientX-press.x,event.clientY-press.y)<=3&&!objectDrag.moved)return;
+      objectDrag.moved=true;
+      const rect=canvas.getBoundingClientRect();
+      pointer.set((event.clientX-rect.left)/rect.width*2-1,-(event.clientY-rect.top)/rect.height*2+1);
+      raycaster.setFromCamera(pointer,camera);
+      const value=raycaster.ray.intersectPlane(objectDrag.plane,new THREE.Vector3());
+      if(value&&value.lengthSq()>.0025){value.normalize();onMove(Math.atan2(-value.x,-value.z)*180/Math.PI,Math.asin(Math.max(-1,Math.min(1,value.y)))*180/Math.PI);}
+      canvas.style.cursor='grabbing';event.preventDefault();return;
+    }
     if(!editable||lost||event.buttons){hint.hidden=true;return;}
     const target=locate(event);hint.hidden=!target||target.kind==='object';canvas.style.cursor=target?'pointer':'';
     if(!hint.hidden){hint.textContent=`${target.kind==='keyframe'?'节点':'轨迹'} ${clock(target.timeSeconds)}`;hint.style.left=`${Math.max(8,Math.min(width-120,target.p.x+12))}px`;hint.style.top=`${Math.max(28,target.p.y-12)}px`;}
   };
   const leave=()=>{hint.hidden=true;canvas.style.cursor='';};
-  const cancel=()=>{press=null;leave();};
+  const cancel=()=>{press=null;objectDrag=null;controls.enabled=true;leave();};
   const orbit=()=>{canvas.dataset.view='custom';onOrbit();};
   const controlsChanged=()=>{if(!settingView)orbit();hint.hidden=true;render();};
   const contextLost=event=>{event.preventDefault();lost=true;cancel();notice.textContent='三维图形环境已中断；二维编辑仍可使用。';notice.hidden=false;};
   const contextRestored=()=>{lost=false;notice.hidden=true;resize();};
-  canvas.addEventListener('pointerdown',down);canvas.addEventListener('pointerup',up);canvas.addEventListener('pointercancel',cancel);canvas.addEventListener('pointermove',hover);canvas.addEventListener('pointerleave',leave);
+  canvas.addEventListener('pointerdown',down,true);canvas.addEventListener('pointerup',up);canvas.addEventListener('pointercancel',cancel);canvas.addEventListener('pointermove',hover);canvas.addEventListener('pointerleave',leave);
   canvas.addEventListener('webglcontextlost',contextLost);canvas.addEventListener('webglcontextrestored',contextRestored);
   controls.addEventListener('change',controlsChanged);
   const observer=new ResizeObserver(resize);observer.observe(canvas);setView('perspective');resize();
   return {get available(){return !disposed&&!lost;},update,setView,resize,dispose(){
     if(disposed)return;disposed=true;observer.disconnect();controls.removeEventListener('change',controlsChanged);controls.dispose();
-    for(const [event,handler] of [['pointerdown',down],['pointerup',up],['pointercancel',cancel],['pointermove',hover],['pointerleave',leave],['webglcontextlost',contextLost],['webglcontextrestored',contextRestored]])canvas.removeEventListener(event,handler);
+    for(const [event,handler] of [['pointerdown',down],['pointerup',up],['pointercancel',cancel],['pointermove',hover],['pointerleave',leave],['webglcontextlost',contextLost],['webglcontextrestored',contextRestored]])canvas.removeEventListener(event,handler,event==='pointerdown');
     disposeGroup(scene);renderer.dispose();labels.replaceChildren();records.clear();
   }};
 }

@@ -104,13 +104,16 @@ class EnvironmentContractTests(AioHTTPTestCase):
 
     async def test_status_reports_actual_environment_and_static_boundary(self):
         data = await (await self.client.get("/api/spatial/status")).json()
-        self.assertEqual(data["version"], "0.8.4")
+        self.assertEqual(data["version"], "0.9.0")
         self.assertEqual(data["environment"]["sourceRoot"], str(ROOT))
         self.assertEqual(data["environment"]["python"], sys.executable)
         self.assertEqual(data["environment"]["prefix"], sys.prefix)
         self.assertEqual(data["environment"]["separationPython"], str(Path("/missing/python").absolute()))
         self.assertFalse(data["environment"]["isolated"])
         self.assertEqual((await self.client.get("/public/spatial-icon.svg")).status, 200)
+        for path in ("spatial-audio/automation-take.mjs", "spatial-audio/live-monitor.mjs",
+                     "spatial-audio/history.mjs", "docs/AUTOMATION.md"):
+            self.assertEqual((await self.client.get("/"+path)).status, 200, path)
         for path in ("music-prompt/style.css", "music-prompt/icon.svg", "run.py", ".runtime/config.json"):
             self.assertEqual((await self.client.get("/" + path)).status, 404)
 

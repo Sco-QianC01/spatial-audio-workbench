@@ -75,7 +75,7 @@ test('speaker-only render saves selected layout and completes without browser HR
   const source=readFileSync(new URL('../spatial-audio/app.mjs',import.meta.url),'utf8');
   const renderSource=source.slice(source.indexOf('async function render({'),source.indexOf('\nfunction canvasContext('));
   const create=new Function('api','finishBinaural',`
-    let scene={speakerLayout:'7.1.4'},busy=false,generation=0,revision=1;
+    let scene={speakerLayout:'7.1.4'},busy=false,generation=0,revision=1,writeTake=null;const liveMonitor={stop(){}};
     let project={id:'test',sceneHash:'before'};
     const clone=structuredClone,json=body=>({body}),speakerLayout=()=>scene.speakerLayout;
     const $=()=>({pause(){},value:0,textContent:''});
@@ -102,7 +102,7 @@ test('render failure never restores stale edits but retains saved speaker result
   const source=readFileSync(new URL('../spatial-audio/app.mjs',import.meta.url),'utf8');
   const renderSource=source.slice(source.indexOf('async function render({'),source.indexOf('\nfunction canvasContext('));
   const create=new Function('failSave',`
-    let scene={speakerLayout:'7.1.4'},busy=false,generation=0,revision=1;
+    let scene={speakerLayout:'7.1.4'},busy=false,generation=0,revision=1,writeTake=null;const liveMonitor={stop(){}};
     let project={id:'test',sceneHash:'old',artifacts:{surroundUrl:'old_5_1_2.wav'}};
     const restored=[],errors=[],clone=structuredClone,json=body=>body;
     const $=()=>({pause(){}}),setBusy=value=>{busy=value},clearPreview=()=>{},message=(text,error)=>{if(error)errors.push(text)},artifacts=value=>restored.push(value);
@@ -175,7 +175,7 @@ test('stem name click selects at current playhead without seeking or pausing pla
     const document={createElement:tag=>{const element=node();element.tagName=tag;nodes.push(element);return element}};
     const elements={stems:node(),'stem-count':node()},$=id=>elements[id];
     const scene={objects:[{id:'vocals',label:'Voice',azimuthDeg:0,elevationDeg:0}]},COLORS={},LABELS={};
-    let selectedId=null,busy=false,selectedTime=0,playhead=30;
+    let selectedId=null,busy=false,selectedTime=0,playhead=30,writeTake=null;
     const audio={currentTime:30,paused:false},selections=[];
     const selectKeyframe=(id,at,move=true)=>{selections.push([id,at,move]);if(move)audio.currentTime=0};
     ${renderSource}

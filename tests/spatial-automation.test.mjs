@@ -32,13 +32,13 @@ test('insertion uses current interpolated position and updating an existing time
   assert.equal(animated().keyframes.length,2);
 });
 
-test('nonfinite/out-of-range times, close spacing and more than 32 nodes are rejected',()=>{
+test('nonfinite/out-of-range times, close spacing and more than 12002 nodes are rejected',()=>{
   for(const time of [NaN,Infinity,-.001,1.001,'0',true])assert.throws(()=>upsertKeyframe(object(),time,1),RangeError);
   for(const duration of [NaN,Infinity,0,-1])assert.throws(()=>upsertKeyframe(object(),0,duration),RangeError);
   assert.throws(()=>upsertKeyframe(object(),.1001,.1003),/1毫秒/);
-  const item={...object(),keyframes:Array.from({length:32},(_,i)=>({timeSeconds:i/31,azimuthDeg:0,elevationDeg:0}))};
-  assert.throws(()=>upsertKeyframe(item,.5,1),/32/);
-  assert.equal(upsertKeyframe(item,0,1).keyframes.length,32);
+  const item={...object(),keyframes:Array.from({length:12002},(_,i)=>({timeSeconds:i/12001*600,azimuthDeg:0,elevationDeg:0}))};
+  assert.throws(()=>upsertKeyframe(item,.5,600),/12002/);
+  assert.equal(upsertKeyframe(item,0,600).keyframes.length,12002);
 });
 
 test('move preserves positions, fixes endpoints and enforces sorted 1ms spacing',()=>{

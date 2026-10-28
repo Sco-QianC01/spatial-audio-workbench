@@ -11,9 +11,62 @@ function extract(name){
   assert.ok(end>match.index,`Missing function end: ${name}`);
   return source.slice(match.index,end+2);
 }
+
+test('undo during an unfinished or oversized Write discards only that take and preserves the scene',()=>{
+  const create=new Function(`
+    let busy=false,sceneHistory={},scene={objects:[{id:'track01',keyframes:[{timeSeconds:0,azimuthDeg:0}]}]},writeTake={count:12001},writeTarget='track01',writePosition={azimuthDeg:90},paused=0;
+    const before=JSON.stringify(scene),$=()=>({pause(){paused++}}),renderStems=()=>{},renderParameters=()=>{},draw=()=>{},message=()=>{};
+    ${extract('undoScene')}
+    return {undoScene,state:()=>({same:JSON.stringify(scene)===before,writeTake,writeTarget,writePosition,paused})};
+  `);
+  const ui=create();ui.undoScene(true);
+  assert.equal(ui.state().writeTake.count,12001,'redo cannot discard a take');
+  ui.undoScene();
+  assert.deepEqual(ui.state(),{same:true,writeTake:null,writeTarget:null,writePosition:null,paused:1});
+});
+
+test('dragging the selected source in the 2D panel keeps Write running; another track ends it first',()=>{
+  const create=new Function(`
+    let scene={objects:[{id:'track01'},{id:'track02'}]},busy=false,writeTake={},writeTarget='track01',dragging=null,selectedTime=0,pauses=0,writes=0;
+    const calls=[],canvas={getBoundingClientRect:()=>({left:0,top:0,width:200,height:200}),setPointerCapture(){}};
+    const $=id=>id==='live-audio'?{pause(){pauses++}}:canvas;
+    const point=o=>({azimuthDeg:o.id==='track01'?0:180,elevationDeg:0}),editPoint=()=>point(scene.objects[0]);
+    const selectKeyframe=(...args)=>calls.push(args),setPosition=()=>writes++;
+    ${extract('pointer')}
+    return {pointer,state:()=>({calls,pauses,writes})};
+  `);
+  const ui=create();
+  ui.pointer({type:'pointerdown',clientX:100,clientY:28,pointerId:1},'top-canvas');
+  assert.deepEqual(ui.state(),{calls:[['track01',0,false]],pauses:0,writes:1});
+  ui.pointer({type:'pointerdown',clientX:100,clientY:172,pointerId:2},'top-canvas');
+  assert.equal(ui.state().pauses,1);assert.equal(ui.state().writes,1);
+});
+
+test('Read playback cannot rewrite the selected start keyframe through a position gesture',()=>{
+  const create=new Function(`
+    let object={id:'track01',azimuthDeg:0,elevationDeg:0,keyframes:[{timeSeconds:0,azimuthDeg:0,elevationDeg:0}]},busy=false,playbackId='live-audio',writeTarget=null,selectedTime=0;
+    const currentObject=()=>object,$=()=>({paused:false}),editPoint=()=>object.keyframes[0],changed=()=>{throw Error('Read must not write')};
+    ${extract('setPosition')}
+    return {setPosition,get:()=>object};
+  `);
+  const ui=create();ui.setPosition(120,40);
+  assert.equal(ui.get().azimuthDeg,0);assert.equal(ui.get().keyframes[0].azimuthDeg,0);
+});
+
+test('failed take merge retains its target and reaches an actionable error state',async()=>{
+  const create=new Function(`
+    let scene={},busy=false,monitorLoading=false,writeTake={count:12001},writeTarget='track01',writePosition={azimuthDeg:90};
+    const errors=[],finishWrite=()=>{throw Error('merged curve exceeds limit')},updateAutomationState=()=>{},message=(text,error)=>errors.push({text,error});
+    ${extract('automationMode')}
+    return {automationMode,state:()=>({writeTake,writeTarget,writePosition,errors})};
+  `);
+  const ui=create();await assert.doesNotReject(ui.automationMode('read'));
+  assert.equal(ui.state().writeTarget,'track01');assert.equal(ui.state().writeTake.count,12001);
+  assert.deepEqual(ui.state().errors,[{text:'merged curve exceeds limit',error:true}]);
+});
 function transport({playing=false,busy=false,withScene=true}={}){
   const create=new Function('options',`
-    let busy=options.busy,scene=options.withScene?{durationSeconds:30}:null,mixControls;
+    let busy=options.busy,scene=options.withScene?{durationSeconds:30}:null,mixControls,writeTake=null;let playbackIntent=0,monitorRequest=0,monitorLoading=false;const liveMonitor={stop(){}};
     let playhead=12,playbackId='source-audio';
     const make=(id,src,duration)=>({id,duration,currentTime:12,paused:true,dataset:{},getAttribute:name=>name==='src'?src:null,pause(){this.paused=true},async play(){this.paused=false}});
     const nodes={'source-audio':make('source-audio','/original.wav',30),'preview':make('preview','/hrtf.wav',30.25),'stem-audio':make('stem-audio',null,30),'mix-audio':make('mix-audio','/compare.wav',30),seek:{},'time-current':{}};
@@ -58,7 +111,7 @@ test('seek includes actual HRTF tail and supports imported audio before scene ex
 
 function edits({dirty=true,conflict=false}={}){
   const create=new Function('options',`
-    let scene={durationSeconds:30,objects:[{id:'other',azimuthDeg:45}]},revision=options.dirty?2:0,busy=false;
+    let scene={durationSeconds:30,objects:[{id:'other',azimuthDeg:45}]},revision=options.dirty?2:0,busy=false,writeTake=null;
     let project={id:'a'.repeat(32),sceneHash:'original'};
     let begins=0,generation=0;const runtime={limits:{maxUploadBytes:100,maxNativeBundleBytes:100}};
     const begin=()=>{begins++;scene=null;revision=0;return ++generation};
@@ -118,13 +171,13 @@ test('oversized local input is rejected before saving or clearing current projec
 });
 
 test('late play event from an already paused source cannot steal or stop current HRTF',()=>{
-  const start=source.indexOf("\nfor(const id of ['preview','source-audio','stem-audio','mix-audio']){");
+  const start=source.indexOf("\nfor(const id of ['preview','source-audio','stem-audio','mix-audio','live-audio']){");
   assert.ok(start>=0,'Missing actual media event binding');
   const end=source.indexOf('\nfunction stopPlayhead()',start);
   const create=new Function(`
-    let playbackId='preview',stops=0,starts=0,syncs=0,mixControls;
+    let playbackId='preview',stops=0,starts=0,syncs=0,mixControls;let playbackIntent=0,monitorRequest=0,monitorLoading=false;const liveMonitor={stop(){}};
     const make=id=>({id,paused:id!=='preview',pauseCalls:0,listeners:{},getAttribute:()=>'/audio.wav',pause(){this.paused=true;this.pauseCalls++},addEventListener(event,fn){this.listeners[event]=fn}});
-    const nodes=Object.fromEntries(['preview','source-audio','stem-audio','mix-audio'].map(id=>[id,make(id)]));
+    const nodes=Object.fromEntries(['preview','source-audio','stem-audio','mix-audio','live-audio'].map(id=>[id,make(id)]));
     const $=id=>nodes[id],stopPlayhead=()=>stops++,startPlayhead=()=>starts++,syncPlayhead=()=>syncs++,updateTransport=()=>{};
     ${extract('transportAudio')}
     ${source.slice(start,end)}
@@ -173,7 +226,7 @@ test('keyframe time editing synchronizes the active reference audio and visual c
   const handler=source.split('\n').find(line=>line.startsWith("$('keyframe-time').addEventListener('change'"));
   const run=new Function('moveKeyframeTime','playing',`
     let scene={durationSeconds:30,objects:[{id:'x',keyframes:[{timeSeconds:0},{timeSeconds:5},{timeSeconds:30}]}]};
-    let selectedTime=5,playhead=5,selectedId='x',busy=false,revision=0,change;
+    let selectedTime=5,playhead=5,selectedId='x',busy=false,revision=0,change,writeTake=null,sceneHistory=null,dragging=null;const document={};
     const audio={currentTime:5,paused:!playing,duration:30};
     const nodes={'keyframe-time':{value:'12',addEventListener(type,fn){change=fn}},seek:{},'time-current':{}};
     const $=id=>nodes[id],currentObject=()=>scene.objects[0],transportAudio=()=>audio;

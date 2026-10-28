@@ -15,7 +15,7 @@
 
 ## 源码中可核对的交互与坐标
 
-**IEM。** [SpherePanner.h](https://git.iem.at/audioplugins/IEMPluginSuite/-/blob/master/resources/customComponents/SpherePanner.h) 将球面方向映射到二维圆盘，区分方位与仰角操作，并包含立体声宽度手柄。[StereoEncoder 的处理器](https://git.iem.at/audioplugins/IEMPluginSuite/-/blob/master/StereoEncoder/Source/PluginProcessor.cpp) 用四元数推导左右输入方向，并在处理块之间渐变编码增益。[Conversions.h](https://git.iem.at/audioplugins/IEMPluginSuite/-/blob/master/resources/Conversions.h) 使用 `x=cos(el)cos(az), y=cos(el)sin(az), z=sin(el)`，即前、左、上坐标。可借鉴单轴约束、明确的宽度手柄和连续参数更新；这些源码并未提供本项目的 2–32 关键帧时间轴。
+**IEM。** [SpherePanner.h](https://git.iem.at/audioplugins/IEMPluginSuite/-/blob/master/resources/customComponents/SpherePanner.h) 将球面方向映射到二维圆盘，区分方位与仰角操作，并包含立体声宽度手柄。[StereoEncoder 的处理器](https://git.iem.at/audioplugins/IEMPluginSuite/-/blob/master/StereoEncoder/Source/PluginProcessor.cpp) 用四元数推导左右输入方向，并在处理块之间渐变编码增益。[Conversions.h](https://git.iem.at/audioplugins/IEMPluginSuite/-/blob/master/resources/Conversions.h) 使用 `x=cos(el)cos(az), y=cos(el)sin(az), z=sin(el)`，即前、左、上坐标。可借鉴单轴约束、明确的宽度手柄和连续参数更新；这些源码并未提供本项目的关键帧时间轴。
 
 **JSAmbisonics。** [单声道编码器](https://github.com/polarch/JSAmbisonics/blob/master/src/ambi-monoEncoder.js) 将角度转换为球谐系数；[sceneRotator](https://github.com/polarch/JSAmbisonics/blob/master/src/ambi-sceneRotator.js) 将整个声场的 yaw/pitch/roll 与单个对象位置分开。[转换器](https://github.com/polarch/JSAmbisonics/blob/master/src/ambi-converters.js) 明确实现 SN3D 与 N3D 的阶次缩放。其[默认 ACN/N3D 约定](https://github.com/polarch/JSAmbisonics/blob/master/README.md) 与本地 FOA ACN/SN3D 不同；比较系数前必须转换归一化，不能直接以振幅差判定错误。
 
@@ -44,7 +44,7 @@
 ## 对本项目的三条直接建议与边界
 
 1. 对象拖动保留明确的方位/仰角约束与数值精修，宽度使用独立可辨识控件；借鉴 IEM 的操作分工，保持本地单位球和角度契约。
-2. 轨迹显示继续对应本地 2–32 关键帧与最短角插值；Three.js addon 负责可读线宽，样条示例只用于交互参考，视觉曲线不能改变实际音频轨迹。
+2. 轨迹显示继续对应本地关键帧与最短角插值；Three.js addon 负责可读线宽，样条示例只用于交互参考，视觉曲线不能改变实际音频轨迹。
 3. 将立体声方向间距、单声源扩散和场景旋转作为不同含义处理。任何未来编码器替换先核对 ACN 顺序、SN3D/N3D、坐标与增益，再进行数值和听音验证。
 
 本轮没有复制 IEM GPL 源码，没有替换空间音频 DSP，没有据此宣称声像或音效通过。FOA 是一阶 Ambisonics 表示，不是 ADM 文件或 Dolby Atmos 母版。本文仅核对来源、许可声明、适配记录与调用关系；物理 5.1.2、耳机听感、macOS 设备及 Dolby Renderer/ADM 工作流仍不在本次验收范围。

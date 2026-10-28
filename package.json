@@ -1,6 +1,6 @@
 {
   "name": "spatial-audio-workbench",
-  "version": "0.1.0",
+  "version": "0.9.0",
   "private": true,
   "description": "Independent local mixing and spatial-audio workbench",
   "type": "module",

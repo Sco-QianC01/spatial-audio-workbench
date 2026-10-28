@@ -469,7 +469,7 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
     async def status(request):
         ready = python.is_file() and weights.is_file() and bool(ffmpeg)
         return web.json_response({
-            "app": "neural-spatial-audio", "version": "0.8.4", "workflow": WORKFLOW,
+            "app": "neural-spatial-audio", "version": "0.9.0", "workflow": WORKFLOW,
             "environment": environment_status(python),
             "stereoGeometry": STEREO_GEOMETRY,
             "ready": True, "working": work_lock.locked(),
@@ -1119,12 +1119,13 @@ def create_app(output, separation_python, weights, demo=None, downloads=None, ff
         if path in ("", "spatial-audio", "spatial-audio/"):
             target = ROOT / "spatial-audio/index.html"
         elif path in ("spatial-audio/app.mjs", "spatial-audio/mix.mjs", "spatial-audio/automation.mjs", "spatial-audio/model-link.mjs", "spatial-audio/scene-view.mjs", "spatial-audio/coordinates.mjs",
+                      "spatial-audio/automation-take.mjs", "spatial-audio/live-monitor.mjs", "spatial-audio/history.mjs",
                       "spatial-audio/assets/listener-head.json", "spatial-audio/assets/LISTENER-LICENSE.txt",
                       "spatial-audio/trajectory.mjs", "public/vendor/three/lines/Line2.js", "public/vendor/three/lines/LineGeometry.js",
                       "public/vendor/three/lines/LineMaterial.js", "public/vendor/three/lines/LineSegments2.js", "public/vendor/three/lines/LineSegmentsGeometry.js",
                       "public/vendor/three/three.module.min.js", "public/vendor/three/three.core.min.js", "public/vendor/three/OrbitControls.js",
                       "spatial-audio/style.css", "public/spatial-icon.svg",
-                      "docs/SPATIAL-AUDIO.md", "docs/SPATIAL-VIEW.md",
+                      "docs/SPATIAL-AUDIO.md", "docs/SPATIAL-VIEW.md", "docs/AUTOMATION.md",
                       "docs/SPATIAL-FOUR-MODEL-WORKFLOW.md", "docs/SPATIAL-STUDIO-HANDOFF.md",
                       "docs/SPATIAL-STEM-ROUTES.md", "docs/examples/ace-native-stems-plan.json", "public/vendor/fonts/NotoSansSC.ttf"):
             target = ROOT / path
